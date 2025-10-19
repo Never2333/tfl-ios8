@@ -1,0 +1,9 @@
+{
+  "name": "tfl-platform-ios8-lite",
+  "version": "1.1.0",
+  "private": true,
+  "scripts": {
+    "build": "echo 'static + api'",
+    "start": "echo 'Deploy with Vercel'"
+  }
+}

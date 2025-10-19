@@ -1,0 +1,132 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>站台屏（iOS8 兼容，含搜索）</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="apple-touch-icon" href="/icon-152.png">
+<style>
+  body{margin:0;background:#000;color:#ff9a00;font:18px/1.4 -apple-system,Helvetica,Arial;}
+  .top{padding:10px;border-bottom:1px solid #222;display:-webkit-box;display:-webkit-flex;display:flex;
+       -webkit-box-pack:justify;-webkit-justify-content:space-between;justify-content:space-between;
+       -webkit-box-align:center;-webkit-align-items:center;align-items:center}
+  .title{font-weight:bold}
+  .ctrl{background:#000;color:#ffcf7f;border:1px solid #333;border-radius:6px;padding:6px 8px}
+  .bar{color:#ffcf7f;font-size:14px;padding:8px 10px;border-bottom:1px dashed #222}
+  .row{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center;padding:10px 8px;border-bottom:1px dashed #222}
+  .idx{width:40px}
+  .dest{-webkit-box-flex:1;-webkit-flex:1;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .eta{width:80px;text-align:right}
+  .muted{color:#777}
+  .searchBox{display:-webkit-box;display:-webkit-flex;display:flex;gap:8px;padding:10px;border-bottom:1px solid #222}
+  .input{flex:1;background:#000;border:1px solid #333;border-radius:6px;color:#ffcf7f;padding:8px}
+  .suggest{padding:4px 10px;border-bottom:1px dashed #222}
+  .sitem{padding:8px;border:1px solid #222;border-radius:6px;margin:6px 0}
+  .badge{color:#ffcf7f;font-size:12px}
+</style>
+
+<div class="top">
+  <div class="title">站台屏</div>
+  <div>
+    <label>显示</label>
+    <select id="limit" class="ctrl"><option>3</option><option>5</option><option selected>8</option><option>10</option><option>15</option><option>20</option></select>
+    <button id="fs" class="ctrl">全屏</button>
+  </div>
+</div>
+
+<div class="searchBox">
+  <input id="q" class="input" placeholder="输入站名（例如 Hammersmith, King's Cross, Waterloo）">
+  <button id="go" class="ctrl">搜索</button>
+</div>
+<div id="suggest" class="suggest"></div>
+
+<div class="bar">
+  站点：<span id="station">-</span>　时间：<span id="clock">--:--:--</span>
+</div>
+<div id="list"></div>
+
+<script>
+(function(){
+  function qs(k){var m=location.search.match(new RegExp('[?&]'+k+'=([^&]+)'));return m?decodeURIComponent(m[1]):'';}
+  function pad(n){n=String(n);return n.length<2?('0'+n):n;}
+  function nowstr(){var d=new Date();return [pad(d.getHours()),pad(d.getMinutes()),pad(d.getSeconds())].join(':');}
+  function m(sec){sec=+sec||0;var t=Math.floor(sec/60);return t<=0?'Due':(t==1?'1 min':t+' mins');}
+  function clean(s){return (s||'').replace(/\s*\(?Underground Station\)?/gi,'').replace(/\s+/g,' ').replace(/^\s+|\s+$/g,'');}
+  function fetchJSON(url, cb){var xhr=new XMLHttpRequest();xhr.open('GET',url,true);xhr.onreadystatechange=function(){if(xhr.readyState===4){try{cb(null,JSON.parse(xhr.responseText));}catch(e){cb(e);}}};xhr.send(null);}
+  var id = qs('id')||''; // 若没给 id，要求先搜索
+  var limitSel = document.getElementById('limit');
+  var stationEl = document.getElementById('station');
+  var listEl = document.getElementById('list');
+  var clockEl = document.getElementById('clock');
+  var qInput = document.getElementById('q');
+  var goBtn  = document.getElementById('go');
+  var suggEl = document.getElementById('suggest');
+
+  function render(arr, name){
+    stationEl.innerHTML = name||id||'-';
+    var lim = parseInt(limitSel.value,10)||8;
+    var html='';
+    for(var i=0;i<Math.min(lim, arr.length);i++){
+      var t = arr[i];
+      html += '<div class="row"><div class="idx">'+(i+1)+'</div><div class="dest">'+clean(t.towards)+'</div><div class="eta">'+t.eta+'</div></div>';
+    }
+    listEl.innerHTML = html || '<div class="muted" style="padding:10px">暂无到站信息</div>';
+  }
+
+  function refresh(){
+    if(!id){ listEl.innerHTML = '<div class="muted" style="padding:10px">请先搜索并选择车站</div>'; return; }
+    var u = '/api/platform?id=' + encodeURIComponent(id) + '&limit=' + encodeURIComponent(limitSel.value) + '&_=' + Date.now();
+    fetchJSON(u, function(err, j){
+      if (err) { listEl.innerHTML = '<div class="muted" style="padding:10px">加载失败</div>'; return; }
+      var entries = (j && j.entries) || [];
+      render(entries, j && j.stationName);
+    });
+  }
+
+  function searchStations(){
+    var q = qInput.value||'';
+    if (q.replace(/\s+/g,'').length < 2){ suggEl.innerHTML = '<div class="muted">输入至少 2 个字符</div>'; return; }
+    var u = '/api/search?q=' + encodeURIComponent(q) + '&_=' + Date.now();
+    fetchJSON(u, function(err, j){
+      if (err) { suggEl.innerHTML = '<div class="muted">搜索失败</div>'; return; }
+      var list = (j && j.results)||[];
+      if(!list.length){ suggEl.innerHTML = '<div class="muted">无结果</div>'; return; }
+      var html = '';
+      for(var i=0;i<list.length;i++){
+        var s = list[i];
+        var badge = (s.lines||[]).map(function(l){return l.name;}).join(' / ');
+        html += '<div class="sitem"><a href="#" data-id="'+s.id+'" data-name="'+(s.name||'')+'"><b>'+s.name+'</b><br><span class="badge">'+badge+'</span></a></div>';
+      }
+      suggEl.innerHTML = html;
+    });
+  }
+
+  suggEl.onclick = function(e){
+    var t = e.target;
+    while (t && t.tagName !== 'A'){ t = t.parentNode; }
+    if (!t) return;
+    var sid = t.getAttribute('data-id');
+    var snm = t.getAttribute('data-name');
+    if (sid){
+      id = sid;
+      stationEl.innerHTML = snm || sid;
+      refresh();
+      e.preventDefault();
+      // 清空联想
+      suggEl.innerHTML = '';
+      qInput.blur();
+    }
+  };
+
+  // 初次（若 URL 已提供 id）
+  if (id){ refresh(); }
+
+  // 轮询与时钟
+  setInterval(refresh, 15000);
+  setInterval(function(){ clockEl.innerHTML = nowstr(); }, 1000);
+  document.getElementById('fs').onclick = function(){ var de=document.documentElement; if(de.requestFullscreen) de.requestFullscreen(); };
+  limitSel.onchange = refresh;
+  goBtn.onclick = searchStations;
+  qInput.onkeyup = function(ev){ var k = ev.keyCode||ev.which; if(k===13){ searchStations(); } };
+})();
+</script>

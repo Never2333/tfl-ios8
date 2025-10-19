@@ -1,0 +1,116 @@
+export const config = { runtime: 'nodejs' };
+
+// Build station list on first request using TfL APIs; keep in-memory cache for the lambda
+const STATE = global._IOS8_SEARCH_CACHE ||= { builtAt: 0, ttl: 6*60*60*1000, stations: [] };
+
+function cleanName(n){ return n ? n.replace(/\s*\(?Underground Station\)?/gi,'').trim() : n; }
+function isStation(sp){
+  const id = String(sp?.id||'');
+  const t  = String(sp?.stopType||'').toLowerCase();
+  return id.startsWith('940G') && (t.indexOf('naptanmetrostation')>=0 || t.indexOf('metro')>=0);
+}
+function deriveLines(sp){
+  var ids = [];
+  if (Array.isArray(sp?.lineModeGroups)){
+    for (var i=0;i<sp.lineModeGroups.length;i++){
+      var g = sp.lineModeGroups[i];
+      if (String(g.modeName||'').toLowerCase()==='tube'){
+        var arr = Array.isArray(g.lineIdentifier) ? g.lineIdentifier : [];
+        for (var j=0;j<arr.length;j++) ids.push(arr[j]);
+      }
+    }
+  }
+  if (!ids.length && Array.isArray(sp?.lines)) ids = sp.lines.map(function(l){ return l.id; });
+  // unique
+  var seen = Object.create(null), out=[];
+  for (var k=0;k<ids.length;k++){ var x=ids[k]; if(!seen[x]){ seen[x]=1; out.push(x); } }
+  return out;
+}
+function norm(s){ return String(s||'').toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim(); }
+function score(name, q){
+  var an = norm(name), qn = norm(q);
+  var s=0; if(an.indexOf(qn)===0) s+=100; if(an.indexOf(qn)>=0) s+=40;
+  var parts = qn.split(' ');
+  for (var i=0;i<parts.length;i++){ if(parts[i] && an.indexOf(parts[i])>=0) s+=15; }
+  s += Math.max(0, 20 - Math.min(20, Math.floor(an.length/2)));
+  return s;
+}
+function titleCase(id){
+  var map={'hammersmith-city':'Hammersmith & City','waterloo-city':'Waterloo & City','london-overground':'Overground'};
+  if (map[id]) return map[id];
+  return id.split(/-/g).map(function(w){ return w.charAt(0).toUpperCase()+w.slice(1); }).join(' ');
+}
+
+async function buildStations(){
+  const now = Date.now();
+  if (STATE.stations.length && now - STATE.builtAt < STATE.ttl) return STATE.stations;
+
+  const params = new URLSearchParams();
+  if (process.env.TFL_APP_ID) params.set('app_id', process.env.TFL_APP_ID);
+  if (process.env.TFL_API_KEY) params.set('app_key', process.env.TFL_API_KEY);
+
+  async function fetchJson(u){
+    const r = await fetch(u, { headers: {'User-Agent':'tfl-ios8-search/1.1'} });
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }
+
+  // 1) try StopPoint/Mode/tube
+  let list = [];
+  try{
+    const url1 = `https://api.tfl.gov.uk/StopPoint/Mode/tube?${params.toString()}`;
+    const data = await fetchJson(url1);
+    const arr  = Array.isArray(data) ? data : [];
+    list = arr.filter(isStation).map(sp => ({
+      id: sp.id, name: cleanName(sp.commonName||sp.name), lines: deriveLines(sp)
+    }));
+  }catch{}
+
+  // 2) fallback by lines
+  if (!list.length){
+    const urlLines = `https://api.tfl.gov.uk/Line/Mode/tube?${params.toString()}`;
+    const lines = await fetchJson(urlLines);
+    const ids = (Array.isArray(lines)?lines:[]).map(l=>l.id).filter(Boolean);
+    let out = [];
+    for (const id of ids){
+      try{
+        const u = `https://api.tfl.gov.uk/Line/${encodeURIComponent(id)}/StopPoints?${params.toString()}`;
+        const data = await fetchJson(u);
+        const arr  = Array.isArray(data)? data : [];
+        const part = arr.filter(isStation).map(sp => ({
+          id: sp.id, name: cleanName(sp.commonName||sp.name), lines: deriveLines(sp)
+        }));
+        out = out.concat(part);
+      }catch{}
+    }
+    // dedupe
+    const map = new Map(); for (const s of out){ if(!map.has(s.id)) map.set(s.id, s); }
+    list = Array.from(map.values());
+  }
+
+  list.sort((a,b)=> a.name.localeCompare(b.name));
+  STATE.stations = list;
+  STATE.builtAt = now;
+  return list;
+}
+
+export default async function handler(req, res){
+  let q = String(req.query.q||''); if(!q) return res.status(400).json({ error:'missing q' });
+  q = q.replace(/[’‘]/g, "'").replace(/\s+/g,' ').trim();
+  if (q.length < 2){ res.setHeader('Cache-Control','no-store'); return res.status(200).json({ results: [] }); }
+
+  const list = await buildStations();
+  const ranked = list
+    .map(s => ({ s, sc: score(s.name, q) }))
+    .filter(x => x.sc>0)
+    .sort((a,b)=> b.sc-a.sc)
+    .slice(0, 20)
+    .map(x => ({
+      id: x.s.id,
+      name: x.s.name,
+      lines: (x.s.lines||[]).map(id => ({ id, name: titleCase(id) }))
+    }));
+
+  res.setHeader('Cache-Control','s-maxage=600, stale-while-revalidate=86400');
+  return res.status(200).json({ results: ranked });
+}
