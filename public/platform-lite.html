@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>站台屏（iOS8 兼容，含搜索）</title>
+<title>站台屏</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="apple-touch-icon" href="/icon-152.png">
@@ -23,6 +23,7 @@
   .suggest{padding:4px 10px;border-bottom:1px dashed #222}
   .sitem{padding:8px;border:1px solid #222;border-radius:6px;margin:6px 0}
   .badge{color:#ffcf7f;font-size:12px}
+  .platHead{padding:4px 10px;color:#ffcf7f;background:#0a0a0a;border-top:1px solid #222;border-bottom:1px dashed #222}
 </style>
 
 <div class="top">
@@ -30,6 +31,8 @@
   <div>
     <label>显示</label>
     <select id="limit" class="ctrl"><option>3</option><option>5</option><option selected>8</option><option>10</option><option>15</option><option>20</option></select>
+    <label>站台</label>
+    <select id="platformSel" class="ctrl"><option value="">全部站台</option></select>
     <button id="fs" class="ctrl">全屏</button>
   </div>
 </div>
@@ -50,11 +53,12 @@
   function qs(k){var m=location.search.match(new RegExp('[?&]'+k+'=([^&]+)'));return m?decodeURIComponent(m[1]):'';}
   function pad(n){n=String(n);return n.length<2?('0'+n):n;}
   function nowstr(){var d=new Date();return [pad(d.getHours()),pad(d.getMinutes()),pad(d.getSeconds())].join(':');}
-  function m(sec){sec=+sec||0;var t=Math.floor(sec/60);return t<=0?'Due':(t==1?'1 min':t+' mins');}
-  function clean(s){return (s||'').replace(/\s*\(?Underground Station\)?/gi,'').replace(/\s+/g,' ').replace(/^\s+|\s+$/g,'');}
+  function clean(s){return (s||'').replace(/\s*\(?Underground Station\)?/gi,'').replace(/\\s+/g,' ').replace(/^\\s+|\\s+$/g,'');}
   function fetchJSON(url, cb){var xhr=new XMLHttpRequest();xhr.open('GET',url,true);xhr.onreadystatechange=function(){if(xhr.readyState===4){try{cb(null,JSON.parse(xhr.responseText));}catch(e){cb(e);}}};xhr.send(null);}
+
   var id = qs('id')||''; // 若没给 id，要求先搜索
   var limitSel = document.getElementById('limit');
+  var platformSel = document.getElementById('platformSel');
   var stationEl = document.getElementById('station');
   var listEl = document.getElementById('list');
   var clockEl = document.getElementById('clock');
@@ -62,24 +66,61 @@
   var goBtn  = document.getElementById('go');
   var suggEl = document.getElementById('suggest');
 
-  function render(arr, name){
+  function render(entries, name, selectedPlatform){
     stationEl.innerHTML = name||id||'-';
-    var lim = parseInt(limitSel.value,10)||8;
     var html='';
-    for(var i=0;i<Math.min(lim, arr.length);i++){
-      var t = arr[i];
-      html += '<div class="row"><div class="idx">'+(i+1)+'</div><div class="dest">'+clean(t.towards)+'</div><div class="eta">'+t.eta+'</div></div>';
+
+    if (selectedPlatform){ // 单一站台：直接渲染
+      if (!entries.length) html = '<div class="muted" style="padding:10px">暂无到站信息</div>';
+      for(var i=0;i<entries.length;i++){
+        var t = entries[i];
+        html += '<div class="row"><div class="idx">'+(i+1)+'</div><div class="dest">'+clean(t.towards)+'</div><div class="eta">'+t.eta+'</div></div>';
+      }
+      listEl.innerHTML = html; return;
+    }
+
+    // 全部站台：按平台名分组显示
+    var groups = {}; var order=[];
+    for(var j=0;j<entries.length;j++){
+      var p = entries[j].platform || 'Platform';
+      if(!groups[p]){ groups[p]=[]; order.push(p); }
+      groups[p].push(entries[j]);
+    }
+    for(var g=0; g<order.length; g++){
+      var pName = order[g];
+      html += '<div class="platHead">站台：'+pName+'</div>';
+      var arr = groups[pName];
+      for(var k=0;k<arr.length;k++){
+        var t2 = arr[k];
+        html += '<div class="row"><div class="idx">'+(k+1)+'</div><div class="dest">'+clean(t2.towards)+'</div><div class="eta">'+t2.eta+'</div></div>';
+      }
     }
     listEl.innerHTML = html || '<div class="muted" style="padding:10px">暂无到站信息</div>';
   }
 
   function refresh(){
     if(!id){ listEl.innerHTML = '<div class="muted" style="padding:10px">请先搜索并选择车站</div>'; return; }
-    var u = '/api/platform?id=' + encodeURIComponent(id) + '&limit=' + encodeURIComponent(limitSel.value) + '&_=' + Date.now();
+    var params = 'id='+encodeURIComponent(id)+'&limit='+encodeURIComponent(limitSel.value);
+    var selectedPlat = platformSel.value||'';
+    if (selectedPlat) params += '&platform='+encodeURIComponent(selectedPlat);
+    var u = '/api/platform?'+params+'&_=' + Date.now();
+
     fetchJSON(u, function(err, j){
       if (err) { listEl.innerHTML = '<div class="muted" style="padding:10px">加载失败</div>'; return; }
       var entries = (j && j.entries) || [];
-      render(entries, j && j.stationName);
+      var plats = (j && j.availablePlatforms) || [];
+
+      // 更新站台下拉（保持已选）
+      var curr = platformSel.value||'';
+      var htmlOpt = '<option value="">全部站台</option>';
+      for (var i=0;i<plats.length;i++){
+        var p = plats[i];
+        htmlOpt += '<option value="'+p.name+'">'+p.name+' ('+p.count+')</option>';
+      }
+      platformSel.innerHTML = htmlOpt;
+      if (curr){ platformSel.value = curr; } // 尝试保留选择
+
+      render(entries, j && j.stationName, selectedPlat);
     });
   }
 
@@ -110,9 +151,9 @@
     if (sid){
       id = sid;
       stationEl.innerHTML = snm || sid;
+      platformSel.value = ''; // 重置站台筛选
       refresh();
       e.preventDefault();
-      // 清空联想
       suggEl.innerHTML = '';
       qInput.blur();
     }
@@ -123,10 +164,11 @@
 
   // 轮询与时钟
   setInterval(refresh, 15000);
-  setInterval(function(){ clockEl.innerHTML = nowstr(); }, 1000);
+  setInterval(function(){ document.getElementById('clock').innerHTML = nowstr(); }, 1000);
   document.getElementById('fs').onclick = function(){ var de=document.documentElement; if(de.requestFullscreen) de.requestFullscreen(); };
-  limitSel.onchange = refresh;
-  goBtn.onclick = searchStations;
-  qInput.onkeyup = function(ev){ var k = ev.keyCode||ev.which; if(k===13){ searchStations(); } };
+  document.getElementById('limit').onchange = refresh;
+  document.getElementById('platformSel').onchange = refresh;
+  document.getElementById('go').onclick = searchStations;
+  document.getElementById('q').onkeyup = function(ev){ var k = ev.keyCode||ev.which; if(k===13){ searchStations(); } };
 })();
 </script>
