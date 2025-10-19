@@ -1,13 +1,5 @@
+// api/platform.js
 export const config = { runtime: 'nodejs' };
-
-const LINE_NAME = {
-  'bakerloo':'Bakerloo','central':'Central','circle':'Circle','district':'District',
-  'elizabeth':'Elizabeth','hammersmith-city':'Hammersmith & City','jubilee':'Jubilee',
-  'metropolitan':'Metropolitan','northern':'Northern','piccadilly':'Piccadilly',
-  'victoria':'Victoria','waterloo-city':'Waterloo & City'
-};
-const titleCaseLine = (id) =>
-  LINE_NAME[id] || (id || '').replace(/-/g,' ').replace(/\b\w/g, m=>m.toUpperCase());
 
 function minutesFromSeconds(sec){
   var s = Number(sec||0);
@@ -22,36 +14,69 @@ function cleanDest(name){
 
 export default async function handler(req, res){
   try{
-    const id = String(req.query.id||'').trim();
+    var id = String(req.query.id||'').trim();
     if (!id) return res.status(400).json({ error:'missing id' });
 
-    const params = new URLSearchParams();
+    var platformFilter = String(req.query.platform||'').trim().toLowerCase(); // 可选：按站台过滤
+    var limit = Math.max(1, Math.min(50, parseInt(req.query.limit||'10',10)));
+
+    var params = new URLSearchParams();
     if (process.env.TFL_APP_ID) params.set('app_id', process.env.TFL_APP_ID);
     if (process.env.TFL_API_KEY) params.set('app_key', process.env.TFL_API_KEY);
 
-    const url = `https://api.tfl.gov.uk/StopPoint/${encodeURIComponent(id)}/Arrivals${params.toString()?`?${params.toString()}`:''}`;
-    const r = await fetch(url, { cache:'no-store', headers:{'User-Agent':'tfl-platform-ios8-lite/1.1'} });
+    var url = 'https://api.tfl.gov.uk/StopPoint/'+encodeURIComponent(id)+'/Arrivals'+(params.toString()?('?'+params.toString()):'');
+    var r = await fetch(url, { cache:'no-store', headers:{'User-Agent':'tfl-platform-ios8/1.2'} });
     if (!r.ok) throw new Error('TfL HTTP '+r.status);
-    const arr = await r.json();
-    const tube = (Array.isArray(arr)?arr:[]).filter(x => String(x.modeName||'').toLowerCase()==='tube');
+    var arr = await r.json();
+    var tube = (Array.isArray(arr)?arr:[]).filter(function(x){
+      return String(x.modeName||'').toLowerCase()==='tube';
+    });
 
-    tube.sort((a,b)=> (a.timeToStation||9e9) - (b.timeToStation||9e9));
+    // 可选：按站台过滤
+    if (platformFilter){
+      tube = tube.filter(function(t){
+        return String(t.platformName||'').toLowerCase() === platformFilter;
+      });
+    }
 
-    const stationName = (tube[0]?.stationName) || id;
-    const limit = Math.max(1, Math.min(20, parseInt(req.query.limit||'10',10)));
+    // 统计站台列表
+    var platMap = Object.create(null);
+    for (var i=0;i<tube.length;i++){
+      var pn = String(tube[i].platformName||'').trim();
+      if (!pn) continue;
+      platMap[pn] = (platMap[pn]||0)+1;
+    }
+    var availablePlatforms = Object.keys(platMap).sort().map(function(name){
+      return { name:name, count: platMap[name] };
+    });
 
-    const list = tube.slice(0, limit).map((t, i) => ({
-      idx: i+1,
-      lineId: t.lineId,
-      lineName: titleCaseLine(t.lineId),
-      platform: t.platformName || '',
-      towards: cleanDest(t.towards || t.destinationName || ''),
-      eta: minutesFromSeconds(Number(t.timeToStation||0))
-    }));
+    // 到站时间排序
+    tube.sort(function(a,b){ return (a.timeToStation||9e9) - (b.timeToStation||9e9); });
+
+    var stationName = (tube[0]&&tube[0].stationName) || (arr[0]&&arr[0].stationName) || id;
+
+    // 若按站台过滤：截断 limit；若不过滤：把前 limit*若干 整体返回，交给前端分组
+    var sliced = tube.slice(0, limit);
+
+    var entries = sliced.map(function(t, i){
+      return {
+        idx: i+1,
+        platform: t.platformName || '',
+        towards: cleanDest(t.towards || t.destinationName || ''),
+        eta: minutesFromSeconds(Number(t.timeToStation||0))
+      };
+    });
 
     res.setHeader('Cache-Control','no-store');
-    return res.status(200).json({ stationName, generatedAt: new Date().toISOString(), entries: list });
+    return res.status(200).json({
+      stationName: stationName,
+      generatedAt: new Date().toISOString(),
+      entries: entries,
+      availablePlatforms: availablePlatforms
+    });
   }catch(e){
-    return res.status(200).json({ stationName:'', generatedAt:null, entries:[] });
+    return res.status(200).json({
+      stationName:'', generatedAt:null, entries:[], availablePlatforms:[]
+    });
   }
 }
