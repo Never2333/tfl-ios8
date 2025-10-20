@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>站台屏</title>
+<title>站台屏（iOS8 兼容：含搜索 + 站台筛选 + 伊丽莎白线）</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="apple-touch-icon" href="/icon-152.png">
@@ -25,7 +25,6 @@
   .badge{color:#ffcf7f;font-size:12px}
   .platHead{padding:4px 10px;color:#ffcf7f;background:#0a0a0a;border-top:1px solid #222;border-bottom:1px dashed #222}
 </style>
-
 <div class="top">
   <div class="title">站台屏</div>
   <div>
@@ -36,139 +35,35 @@
     <button id="fs" class="ctrl">全屏</button>
   </div>
 </div>
-
 <div class="searchBox">
-  <input id="q" class="input" placeholder="输入站名（例如 Hammersmith, King's Cross, Waterloo）">
+  <input id="q" class="input" placeholder="输入站名（Hammersmith / King's Cross / Waterloo / Liverpool Street）">
   <button id="go" class="ctrl">搜索</button>
 </div>
 <div id="suggest" class="suggest"></div>
-
 <div class="bar">
   站点：<span id="station">-</span>　时间：<span id="clock">--:--:--</span>
 </div>
 <div id="list"></div>
-
 <script>
 (function(){
   function qs(k){var m=location.search.match(new RegExp('[?&]'+k+'=([^&]+)'));return m?decodeURIComponent(m[1]):'';}
   function pad(n){n=String(n);return n.length<2?('0'+n):n;}
   function nowstr(){var d=new Date();return [pad(d.getHours()),pad(d.getMinutes()),pad(d.getSeconds())].join(':');}
-  function clean(s){return (s||'').replace(/\s*\(?Underground Station\)?/gi,'').replace(/\\s+/g,' ').replace(/^\\s+|\\s+$/g,'');}
+  function clean(s){return (s||'').replace(/\s*\(?Underground Station\)?/gi,'').replace(/\s+/g,' ').replace(/^\s+|\s+$/g,'');}
   function fetchJSON(url, cb){var xhr=new XMLHttpRequest();xhr.open('GET',url,true);xhr.onreadystatechange=function(){if(xhr.readyState===4){try{cb(null,JSON.parse(xhr.responseText));}catch(e){cb(e);}}};xhr.send(null);}
-
-  var id = qs('id')||''; // 若没给 id，要求先搜索
-  var limitSel = document.getElementById('limit');
-  var platformSel = document.getElementById('platformSel');
-  var stationEl = document.getElementById('station');
-  var listEl = document.getElementById('list');
-  var clockEl = document.getElementById('clock');
-  var qInput = document.getElementById('q');
-  var goBtn  = document.getElementById('go');
-  var suggEl = document.getElementById('suggest');
-
-  function render(entries, name, selectedPlatform){
-    stationEl.innerHTML = name||id||'-';
-    var html='';
-
-    if (selectedPlatform){ // 单一站台：直接渲染
-      if (!entries.length) html = '<div class="muted" style="padding:10px">暂无到站信息</div>';
-      for(var i=0;i<entries.length;i++){
-        var t = entries[i];
-        html += '<div class="row"><div class="idx">'+(i+1)+'</div><div class="dest">'+clean(t.towards)+'</div><div class="eta">'+t.eta+'</div></div>';
-      }
-      listEl.innerHTML = html; return;
-    }
-
-    // 全部站台：按平台名分组显示
-    var groups = {}; var order=[];
-    for(var j=0;j<entries.length;j++){
-      var p = entries[j].platform || 'Platform';
-      if(!groups[p]){ groups[p]=[]; order.push(p); }
-      groups[p].push(entries[j]);
-    }
-    for(var g=0; g<order.length; g++){
-      var pName = order[g];
-      html += '<div class="platHead">站台：'+pName+'</div>';
-      var arr = groups[pName];
-      for(var k=0;k<arr.length;k++){
-        var t2 = arr[k];
-        html += '<div class="row"><div class="idx">'+(k+1)+'</div><div class="dest">'+clean(t2.towards)+'</div><div class="eta">'+t2.eta+'</div></div>';
-      }
-    }
-    listEl.innerHTML = html || '<div class="muted" style="padding:10px">暂无到站信息</div>';
-  }
-
-  function refresh(){
-    if(!id){ listEl.innerHTML = '<div class="muted" style="padding:10px">请先搜索并选择车站</div>'; return; }
-    var params = 'id='+encodeURIComponent(id)+'&limit='+encodeURIComponent(limitSel.value);
-    var selectedPlat = platformSel.value||'';
-    if (selectedPlat) params += '&platform='+encodeURIComponent(selectedPlat);
-    var u = '/api/platform?'+params+'&_=' + Date.now();
-
-    fetchJSON(u, function(err, j){
-      if (err) { listEl.innerHTML = '<div class="muted" style="padding:10px">加载失败</div>'; return; }
-      var entries = (j && j.entries) || [];
-      var plats = (j && j.availablePlatforms) || [];
-
-      // 更新站台下拉（保持已选）
-      var curr = platformSel.value||'';
-      var htmlOpt = '<option value="">全部站台</option>';
-      for (var i=0;i<plats.length;i++){
-        var p = plats[i];
-        htmlOpt += '<option value="'+p.name+'">'+p.name+' ('+p.count+')</option>';
-      }
-      platformSel.innerHTML = htmlOpt;
-      if (curr){ platformSel.value = curr; } // 尝试保留选择
-
-      render(entries, j && j.stationName, selectedPlat);
-    });
-  }
-
-  function searchStations(){
-    var q = qInput.value||'';
-    if (q.replace(/\s+/g,'').length < 2){ suggEl.innerHTML = '<div class="muted">输入至少 2 个字符</div>'; return; }
-    var u = '/api/search?q=' + encodeURIComponent(q) + '&_=' + Date.now();
-    fetchJSON(u, function(err, j){
-      if (err) { suggEl.innerHTML = '<div class="muted">搜索失败</div>'; return; }
-      var list = (j && j.results)||[];
-      if(!list.length){ suggEl.innerHTML = '<div class="muted">无结果</div>'; return; }
-      var html = '';
-      for(var i=0;i<list.length;i++){
-        var s = list[i];
-        var badge = (s.lines||[]).map(function(l){return l.name;}).join(' / ');
-        html += '<div class="sitem"><a href="#" data-id="'+s.id+'" data-name="'+(s.name||'')+'"><b>'+s.name+'</b><br><span class="badge">'+badge+'</span></a></div>';
-      }
-      suggEl.innerHTML = html;
-    });
-  }
-
-  suggEl.onclick = function(e){
-    var t = e.target;
-    while (t && t.tagName !== 'A'){ t = t.parentNode; }
-    if (!t) return;
-    var sid = t.getAttribute('data-id');
-    var snm = t.getAttribute('data-name');
-    if (sid){
-      id = sid;
-      stationEl.innerHTML = snm || sid;
-      platformSel.value = ''; // 重置站台筛选
-      refresh();
-      e.preventDefault();
-      suggEl.innerHTML = '';
-      qInput.blur();
-    }
-  };
-
-  // 初次（若 URL 已提供 id）
-  if (id){ refresh(); }
-
-  // 轮询与时钟
-  setInterval(refresh, 15000);
-  setInterval(function(){ document.getElementById('clock').innerHTML = nowstr(); }, 1000);
-  document.getElementById('fs').onclick = function(){ var de=document.documentElement; if(de.requestFullscreen) de.requestFullscreen(); };
-  document.getElementById('limit').onchange = refresh;
-  document.getElementById('platformSel').onchange = refresh;
-  document.getElementById('go').onclick = searchStations;
-  document.getElementById('q').onkeyup = function(ev){ var k = ev.keyCode||ev.which; if(k===13){ searchStations(); } };
-})();
-</script>
+  var id=qs('id')||'';var limitSel=document.getElementById('limit');var platformSel=document.getElementById('platformSel');var stationEl=document.getElementById('station');var listEl=document.getElementById('list');var clockEl=document.getElementById('clock');var qInput=document.getElementById('q');var goBtn=document.getElementById('go');var suggEl=document.getElementById('suggest');
+  function render(entries,name,selectedPlatform){stationEl.innerHTML=name||id||'-';var html='';if(selectedPlatform){if(!entries.length)html='<div class="muted" style="padding:10px">暂无到站信息</div>';for(var i=0;i<entries.length;i++){var t=entries[i];html+='<div class="row"><div class="idx">'+(i+1)+'</div><div class="dest">'+clean(t.towards)+'</div><div class="eta">'+t.eta+'</div></div>';}listEl.innerHTML=html;return;}
+  var groups={},order=[];for(var j=0;j<entries.length;j++){var p=entries[j].platform||'Platform';if(!groups[p]){groups[p]=[];order.push(p);}groups[p].push(entries[j]);}
+  for(var g=0;g<order.length;g++){var pName=order[g];html+='<div class="platHead">站台：'+pName+'</div>';var arr=groups[pName];for(var k=0;k<arr.length;k++){var t2=arr[k];html+='<div class="row"><div class="idx">'+(k+1)+'</div><div class="dest">'+clean(t2.towards)+'</div><div class="eta">'+t2.eta+'</div></div>';}}listEl.innerHTML=html||'<div class="muted" style="padding:10px">暂无到站信息</div>';}
+  function refresh(){if(!id){listEl.innerHTML='<div class="muted" style="padding:10px">请先搜索并选择车站</div>';return;}var params='id='+encodeURIComponent(id)+'&limit='+encodeURIComponent(limitSel.value);var selectedPlat=platformSel.value||'';if(selectedPlat)params+='&platform='+encodeURIComponent(selectedPlat);var u='/api/platform?'+params+'&_='+Date.now();
+  fetchJSON(u,function(err,j){if(err){listEl.innerHTML='<div class="muted" style="padding:10px">加载失败</div>';return;}var entries=(j&&j.entries)||[];var plats=(j&&j.availablePlatforms)||[];var curr=platformSel.value||'';var htmlOpt='<option value="">全部站台</option>';for(var i=0;i<plats.length;i++){var p=plats[i];htmlOpt+='<option value="'+p.name+'">'+p.name+' ('+p.count+')</option>';}platformSel.innerHTML=htmlOpt;if(curr){platformSel.value=curr;}render(entries,j&&j.stationName,selectedPlat);persistState();});}
+  function searchStations(){var q=qInput.value||'';if(q.replace(/\s+/g,'').length<2){suggEl.innerHTML='<div class="muted">输入至少 2 个字符</div>';return;}var u='/api/search?q='+encodeURIComponent(q)+'&_='+Date.now();
+  fetchJSON(u,function(err,j){if(err){suggEl.innerHTML='<div class="muted">搜索失败</div>';return;}var list=(j&&j.results)||[];if(!list.length){suggEl.innerHTML='<div class="muted">无结果</div>';return;}var html='';for(var i=0;i<list.length;i++){var s=list[i];var badge=(s.lines||[]).map(function(l){return l.name;}).join(' / ');html+='<div class="sitem"><a href="#" data-id="'+s.id+'" data-name="'+(s.name||'')+'"><b>'+s.name+'</b><br><span class="badge">'+badge+'</span></a></div>';}suggEl.innerHTML=html;});}
+  function persistState(){try{var obj={id:id||'',limit:parseInt(limitSel.value,10)||8,platform:platformSel.value||''};localStorage.setItem('ios8_board_state',JSON.stringify(obj));}catch(e){}}
+  try{var saved=localStorage.getItem('ios8_board_state');if(saved){var obj=JSON.parse(saved);if(!id&&obj.id)id=obj.id;if(obj.limit)limitSel.value=String(obj.limit);if(obj.platform)platformSel.value=obj.platform;}}catch(e){}
+  document.getElementById('fs').onclick=function(){var de=document.documentElement;if(de.requestFullscreen)de.requestFullscreen();};
+  document.getElementById('limit').onchange=function(){refresh();persistState();};
+  document.getElementById('platformSel').onchange=function(){refresh();persistState();};
+  document.getElementById('go').onclick=searchStations;document.getElementById('q').onkeyup=function(ev){var k=ev.keyCode||ev.which;if(k===13){searchStations();}};
+  if(id){refresh();}setInterval(refresh,15000);setInterval(function(){document.getElementById('clock').innerHTML=nowstr();},1000);
+})();</script>

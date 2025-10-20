@@ -1,6 +1,6 @@
 {
-  "name": "tfl-platform-ios8-lite",
-  "version": "1.1.0",
+  "name": "tfl-platform-ios8-lite-elizabeth",
+  "version": "1.2.0",
   "private": true,
   "scripts": {
     "build": "echo 'static + api'",

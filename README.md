@@ -1,17 +1,19 @@
-# iOS 8 Lite with Station Search
+# iOS8-lite Platform (Tube + Elizabeth)
 
-- Static page: `/platform-lite.html` — iOS8-compatible (ES5 + XHR + Flex) with **station search**.
-- API:
-  - `/api/search?q=ham` — builds an in-memory station list from TfL on first request and caches (~6h).
-  - `/api/platform?id=940G...&limit=8` — arrivals for a station.
+**What's inside**
+- `public/platform-lite.html` — ES5 + XHR + Flex (iOS8 friendly), search + platform filter
+- `api/search.js` — builds station list for **tube + elizabeth-line** (accepts 940G metro + 910G rail)
+- `api/platform.js` — arrivals for **tube + elizabeth-line**, supports `?platform=` and exposes `availablePlatforms`
+- `package.json` — minimal; **no `vercel.json`** to avoid runtime version error
 
-## Deploy on Vercel
-1) Create project from this folder.
-2) Env:
+**Deploy on Vercel**
+1) New Project → Import this folder (or upload the zip).
+2) Environment Variables:
    - `TFL_API_KEY` (required)
-   - `TFL_APP_ID` (optional)
-3) Open: `https://<domain>/platform-lite.html`
-   - Search a station (e.g., "Hammersmith", "King's Cross"), tap a result to load the board.
-   - Add to Home Screen on iOS 8 for full-screen app-like experience.
+   - `TFL_APP_ID`  (optional)
+3) Open: `https://<your-domain>/platform-lite.html`
+   - Search: “Hammersmith / King's Cross / Liverpool Street / Paddington”
+   - Or direct link: `/platform-lite.html?id=940GZZLUKSX&limit=8`
+4) For very old iOS (≤9) needing TLS 1.0, front with Cloudflare on a dedicated subdomain.
 
-Generated at 2025-10-19T19:49:53.867007Z
+Generated at 2025-10-20T21:50:22.513037Z
