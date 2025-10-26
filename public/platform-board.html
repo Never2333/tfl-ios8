@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>Platform Board (iOS8 compatible, dot-matrix)</title>
+<title>站台屏（iOS8 兼容・点阵风格）</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="apple-touch-icon" href="/icon-152.png">
@@ -20,10 +20,6 @@
   .dest{-webkit-box-flex:1;-webkit-flex:1;flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-right:12px;}
   .eta{width:120px; text-align:right;}
   .muted{color:var(--muted)}
-  .banner{position:absolute; left:0; right:0; padding:8px 14px; text-align:center;}
-  .banner.top{top:0;} .banner.bottom{bottom:0;}
-  .warn{display:none; font-size:22px;} .warn.show{display:block;} .blink{animation:blink 1s step-start infinite;}
-  @keyframes blink { 50%{opacity:0.35;} }
   .dotlike{text-shadow: 0 0 3px rgba(255,154,0,.7);}
   .searchBar{display:-webkit-box;display:-webkit-flex;display:flex;gap:6px;padding:6px 0 4px;border-bottom:1px solid #222}
   .input{flex:1;background:#000;border:1px solid #333;border-radius:6px;color:#ffcf7f;padding:8px}
@@ -32,24 +28,22 @@
   .sitem{padding:0;border:1px solid #222;border-radius:6px;margin:6px 0}
   .sitem a{display:block;padding:10px 12px;text-decoration:none;color:inherit}
   .subbar{margin-top:6px;display:-webkit-box;display:-webkit-flex;display:flex;gap:6px;align-items:center}
+  .bannerRow{padding:10px 2px; text-align:center;}
+  .blink{animation:blink 1s step-start infinite;} @keyframes blink {50%{opacity:.35;}}
 </style>
 
 <div class="screen">
-  <div id="arriveBanner" class="banner top">
-    <div class="warn" id="arriveWarn">STAND BACK — TRAIN APPROACHING</div>
-  </div>
-
   <div class="searchBar">
-    <input id="q" class="input" placeholder="Search station (e.g. Hammersmith / King's Cross / Canary Wharf)">
-    <button id="go" class="ctrl">Search</button>
-    <button id="back" class="ctrl">Back (lite)</button>
+    <input id="q" class="input" placeholder="搜索站名（如 Hammersmith / King's Cross / Canary Wharf）">
+    <button id="go" class="ctrl">搜索</button>
+    <button id="back" class="ctrl">返回简洁版</button>
   </div>
   <div id="suggest" class="suggest"></div>
 
   <div class="subbar">
-    <div>Platform</div>
-    <select id="platformSel" class="ctrl"><option value="">All</option></select>
-    <div>Show</div>
+    <div>站台</div>
+    <select id="platformSel" class="ctrl"><option value="">全部站台</option></select>
+    <div>显示</div>
     <select id="limit" class="ctrl"><option>3</option><option selected>5</option><option>8</option><option>10</option></select>
   </div>
 
@@ -60,10 +54,6 @@
   <div class="list" id="list"></div>
 
   <div class="clock dotlike" id="clock">--:--:--</div>
-
-  <div id="smokeBanner" class="banner bottom">
-    <div class="warn" id="smokeWarn">NO SMOKING OR VAPING</div>
-  </div>
 </div>
 
 <script>
@@ -81,70 +71,75 @@
   var clockEl = document.getElementById('clock');
   var titleEl = document.getElementById('titleStation');
   var listEl = document.getElementById('list');
-  var arriveWarn = document.getElementById('arriveWarn');
-  var smokeWarn = document.getElementById('smokeWarn');
   var qInput = document.getElementById('q'); var suggEl = document.getElementById('suggest');
 
-  function renderList(station, entries){
-    var ext = plat ? (' — '+plat) : (platformSel.value?(' — '+platformSel.value):'');
-    titleEl.innerHTML = station + ext;
-    var html = '';
-    for(var i=0;i<entries.length;i++){
-      var t = entries[i];
-      html += '<div class="row item dotlike">'
-            +   '<div class="num">'+(i+1)+'</div>'
-            +   '<div class="dest">'+clean(t.towards)+'</div>'
-            +   '<div class="eta">'+t.eta+'</div>'
-            + '</div>';
-    }
-    listEl.innerHTML = html || '<div class="muted">No arrivals</div>';
-  }
-
+  var smokeTick=0; function smokingOn(){ return (smokeTick % 25) < 5; }
   function shouldShowArrive(entries){
     for(var i=0;i<entries.length;i++){
-      var e = entries[i];
-      var secs = Number(e.timeToStationSec||0);
+      var e = entries[i]; var secs = Number(e.timeToStationSec||0);
       var loc = String(e.currentLocation||'').toLowerCase();
       if (secs <= 25) return true;
       if (loc.indexOf('approaching')>=0 || loc.indexOf('at platform')>=0) return true;
-    }
-    return false;
+    } return false;
   }
-  function setArriveBanner(on){ arriveWarn.className = 'warn'+(on?' show blink':''); }
 
-  var smokeTick=0, smokeOn=false;
-  function tickSmoke(){
-    smokeTick++; var mod=smokeTick%25; var on=(mod<5);
-    if(on!==smokeOn){ smokeOn=on; smokeWarn.className='warn'+(on?' show':''); }
+  function renderList(station, entries){
+    titleEl.innerHTML = station + (plat ? (' — '+plat) : (platformSel.value?(' — '+platformSel.value):''));
+    var html = ''; var lim = parseInt(limitSel.value,10)||5;
+    if(entries.length>lim) entries = entries.slice(0,lim);
+
+    var standBack = shouldShowArrive(entries);
+    if (standBack){
+      if (entries.length > 0){
+        var t0 = entries[0];
+        html += '<div class="row item dotlike"><div class="num">1</div><div class="dest">'+clean(t0.towards)+'</div><div class="eta">'+t0.eta+'</div></div>';
+      } else {
+        html += '<div class="row item dotlike"><div class="num">1</div><div class="dest muted">暂无到站信息</div><div class="eta"></div></div>';
+      }
+      html += '<div class="bannerRow dotlike blink">STAND BACK — TRAIN APPROACHING</div>';
+      html += '<div class="row item"><div class="num">3</div><div class="dest"></div><div class="eta"></div></div>';
+      listEl.innerHTML = html; return;
+    }
+
+    var smoke = smokingOn();
+    for(var i=0;i<entries.length;i++){
+      if (smoke && i===2){
+        html += '<div class="bannerRow dotlike">NO SMOKING OR VAPING</div>';
+        break;
+      }
+      var t = entries[i];
+      html += '<div class="row item dotlike"><div class="num">'+(i+1)+'</div><div class="dest">'+clean(t.towards)+'</div><div class="eta">'+t.eta+'</div></div>';
+    }
+
+    listEl.innerHTML = html || '<div class="muted">暂无到站信息</div>';
   }
 
   function refresh(){
-    if(!id){ listEl.innerHTML='<div class="muted">Pick a station via search above</div>'; return; }
+    if(!id){ listEl.innerHTML='<div class="muted">请先在上方搜索并选择车站</div>'; return; }
     var selPlat = platformSel.value || plat || '';
     var params='id='+encodeURIComponent(id)+'&limit='+encodeURIComponent(limitSel.value);
     if (selPlat) params += '&platform='+encodeURIComponent(selPlat);
     var u='/api/platform?'+params+'&_='+Date.now();
     fetchJSON(u, function(err, j){
-      if (err || !j){ listEl.innerHTML='<div class="muted">Load failed</div>'; setArriveBanner(false); return; }
+      if (err || !j){ listEl.innerHTML='<div class="muted">加载失败</div>'; return; }
       var entries=(j.entries||[]);
       var plats=(j.availablePlatforms||[]), curr=platformSel.value||'';
-      var htmlOpt='<option value="">All</option>';
+      var htmlOpt='<option value="">全部站台</option>';
       for(var i=0;i<plats.length;i++){var p=plats[i]; htmlOpt+='<option value="'+p.name+'">'+p.name+' ('+p.count+')</option>';}
       platformSel.innerHTML=htmlOpt;
       if(curr){ platformSel.value=curr; } else if(plat){ platformSel.value=plat; }
       renderList(j.stationName||id, entries);
-      setArriveBanner( shouldShowArrive(entries) );
     });
   }
 
   function searchStations(){
-    var q=qInput.value||''; if(q.replace(/\s+/g,'').length<2){suggEl.innerHTML='<div class="muted">Type at least 2 chars</div>'; return; }
+    var q=qInput.value||''; if(q.replace(/\s+/g,'').length<2){suggEl.innerHTML='<div class="muted">输入至少 2 个字符</div>'; return; }
     var u='/api/search?q='+encodeURIComponent(q)+'&_='+Date.now();
     fetchJSON(u,function(err,j){
-      if(err){suggEl.innerHTML='<div class="muted">Search failed</div>';return;}
-      var list=(j&&j.results)||[]; if(!list.length){suggEl.innerHTML='<div class="muted">No results</div>';return;}
+      if(err){suggEl.innerHTML='<div class="muted">搜索失败</div>';return;}
+      var list=(j&&j.results)||[]; if(!list.length){suggEl.innerHTML='<div class="muted">无结果</div>';return;}
       var html=''; for(var i=0;i<list.length;i++){var s=list[i]; var badge=(s.lines||[]).map(function(l){return l.name;}).join(' / ');
-        html+='<div class=\"sitem\"><a href=\"#\" data-id=\"'+s.id+'\" data-name=\"'+(s.name||'')+'\"><b>'+s.name+'</b><br><span class=\"badge\">'+badge+'</span></a></div>'; }
+        html+='<div class="sitem"><a href="#" data-id="'+s.id+'" data-name="'+(s.name||'')+'"><b>'+s.name+'</b><br><span class="badge">'+badge+'</span></a></div>'; }
       suggEl.innerHTML=html;
     });
   }
@@ -166,7 +161,8 @@
   platformSel.onchange=refresh; limitSel.onchange=refresh;
 
   clockEl.innerHTML=nowstr(); setInterval(function(){clockEl.innerHTML=nowstr();},1000);
-  setInterval(refresh,15000); setInterval(tickSmoke,1000);
+  setInterval(function(){ smokeTick++; },1000);
+  setInterval(refresh,15000);
   if(id){ refresh(); }
 })();
 </script>
