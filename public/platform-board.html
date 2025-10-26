@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>站台屏（iOS8 兼容・点阵风格）</title>
+<title>站台显示屏</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="apple-touch-icon" href="/icon-152.png">
@@ -73,44 +73,74 @@
   var listEl = document.getElementById('list');
   var qInput = document.getElementById('q'); var suggEl = document.getElementById('suggest');
 
+  // —— 禁烟间歇：每 25s 显示 5s，仅在未显示“接近”提示时生效
   var smokeTick=0; function smokingOn(){ return (smokeTick % 25) < 5; }
-  function shouldShowArrive(entries){
+
+  // —— 进站判定：只接受有效的正秒数；或 location 提示
+  function isApproaching(entries){
     for(var i=0;i<entries.length;i++){
-      var e = entries[i]; var secs = Number(e.timeToStationSec||0);
+      var e = entries[i];
+      // 只接受“存在且>0”的秒数，避免缺失被当作 0
+      var secsRaw = e.timeToStationSec;
+      var secs = (typeof secsRaw==='number' && isFinite(secsRaw)) ? secsRaw : null;
+      if (secs!==null && secs>0 && secs<=25) return true;
       var loc = String(e.currentLocation||'').toLowerCase();
-      if (secs <= 25) return true;
-      if (loc.indexOf('approaching')>=0 || loc.indexOf('at platform')>=0) return true;
-    } return false;
+      if (loc && (loc.indexOf('approaching')>=0 || loc.indexOf('at platform')>=0)) return true;
+    }
+    return false;
+  }
+
+  // —— 进站提示的“展示时长”与“边沿触发”
+  var arriveShowUntil = 0;            // 到期时间戳（ms）
+  var ARRIVE_DURATION = 8000;         // 展示 8 秒（你可改 5000~10000）
+  function updateArriveWindow(triggerNow){
+    var now = Date.now();
+    // 只有从未显示→触发 才开启一个窗口；窗口内不重复开启
+    if (triggerNow && now > arriveShowUntil){
+      arriveShowUntil = now + ARRIVE_DURATION;
+    }
+    // 窗口到期后自然隐藏
+    return now <= arriveShowUntil;
   }
 
   function renderList(station, entries){
     titleEl.innerHTML = station + (plat ? (' — '+plat) : (platformSel.value?(' — '+platformSel.value):''));
-    var html = ''; var lim = parseInt(limitSel.value,10)||5;
+    var html = '';
+    var lim = parseInt(limitSel.value,10)||5;
     if(entries.length>lim) entries = entries.slice(0,lim);
 
-    var standBack = shouldShowArrive(entries);
-    if (standBack){
+    // 计算是否触发 + 是否处于展示窗口
+    var trigger = isApproaching(entries);
+    var showArrive = updateArriveWindow(trigger);
+
+    if (showArrive){
+      // 第 1 行：首列车
       if (entries.length > 0){
         var t0 = entries[0];
         html += '<div class="row item dotlike"><div class="num">1</div><div class="dest">'+clean(t0.towards)+'</div><div class="eta">'+t0.eta+'</div></div>';
       } else {
         html += '<div class="row item dotlike"><div class="num">1</div><div class="dest muted">暂无到站信息</div><div class="eta"></div></div>';
       }
+      // 第 2 行：进站标语
       html += '<div class="bannerRow dotlike blink">STAND BACK — TRAIN APPROACHING</div>';
-      html += '<div class="row item"><div class="num">3</div><div class="dest"></div><div class="eta"></div></div>';
+      // 第 3 行：留空（不显示“3”编号）
       listEl.innerHTML = html; return;
     }
 
+    // 正常模式：如需显示禁烟，把第 3 行替换为标语（且无编号）
     var smoke = smokingOn();
     for(var i=0;i<entries.length;i++){
       if (smoke && i===2){
         html += '<div class="bannerRow dotlike">NO SMOKING OR VAPING</div>';
-        break;
+        break; // 只替换第三位；后面不再绘制
       }
       var t = entries[i];
-      html += '<div class="row item dotlike"><div class="num">'+(i+1)+'</div><div class="dest">'+clean(t.towards)+'</div><div class="eta">'+t.eta+'</div></div>';
+      html += '<div class="row item dotlike">'
+            +   '<div class="num">'+(i+1)+'</div>'
+            +   '<div class="dest">'+clean(t.towards)+'</div>'
+            +   '<div class="eta">'+t.eta+'</div>'
+            + '</div>';
     }
-
     listEl.innerHTML = html || '<div class="muted">暂无到站信息</div>';
   }
 
@@ -132,6 +162,7 @@
     });
   }
 
+  // —— 搜索（与 lite 页一致）
   function searchStations(){
     var q=qInput.value||''; if(q.replace(/\s+/g,'').length<2){suggEl.innerHTML='<div class="muted">输入至少 2 个字符</div>'; return; }
     var u='/api/search?q='+encodeURIComponent(q)+'&_='+Date.now();
@@ -148,7 +179,7 @@
     while(t&&t.tagName&&t.tagName.toUpperCase()!=='A'){t=t.parentNode;} if(!t) return;
     var sid=t.getAttribute('data-id'); var snm=t.getAttribute('data-name');
     if(sid){ id=sid; plat=''; platformSel.value=''; suggEl.innerHTML=''; qInput.blur(); if(window.scrollTo)try{window.scrollTo(0,0);}catch(ex){}
-      titleEl.innerHTML=snm||sid; refresh(); if(e.preventDefault)e.preventDefault(); if(e.stopPropagation)e.stopPropagation(); return false; }
+      titleEl.innerHTML=snm||sid; renderList('-', []); refresh(); if(e.preventDefault)e.preventDefault(); if(e.stopPropagation)e.stopPropagation(); return false; }
   }
 
   document.getElementById('back').onclick=function(){
@@ -157,11 +188,13 @@
   };
   document.getElementById('go').onclick=searchStations;
   document.getElementById('q').onkeyup=function(ev){var k=ev.keyCode||ev.which;if(k===13){searchStations();}};
+  var suggEl=document.getElementById('suggest');
   if(suggEl.addEventListener){suggEl.addEventListener('touchstart',handlePick,false);suggEl.addEventListener('click',handlePick,false);}else{suggEl.onclick=handlePick;}
   platformSel.onchange=refresh; limitSel.onchange=refresh;
 
+  // 时钟与定时器
   clockEl.innerHTML=nowstr(); setInterval(function(){clockEl.innerHTML=nowstr();},1000);
-  setInterval(function(){ smokeTick++; },1000);
+  setInterval(function(){ smokeTick++; },1000); // 控制禁烟节奏
   setInterval(refresh,15000);
   if(id){ refresh(); }
 })();
