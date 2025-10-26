@@ -1,0 +1,172 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Platform Board (iOS8 compatible, dot-matrix)</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="apple-touch-icon" href="/icon-152.png">
+<style>
+  @font-face { font-family: 'StationLED'; src: url('/assets/fonts/Station/Station.ttf') format('truetype'); font-weight: normal; font-style: normal; }
+  :root{ --fg:#ff9a00; --muted:#8a6a3a; }
+  html,body{height:100%;}
+  body{ margin:0;background:#000;color:var(--fg); font:18px/1.4 'StationLED', -apple-system, Helvetica, Arial; overflow:hidden; }
+  .screen{position:relative; height:100%; padding:10px 14px; box-sizing:border-box;}
+  .row{display:-webkit-box;display:-webkit-flex;display:flex; -webkit-box-align:center;-webkit-align-items:center;align-items:center;}
+  .title{justify-content:center; font-size:42px; margin-top:4px;}
+  .clock{text-align:center; font-size:32px; margin-top:30px;}
+  .list{margin-top:16px;}
+  .item{padding:10px 2px;}
+  .num{width:36px;}
+  .dest{-webkit-box-flex:1;-webkit-flex:1;flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-right:12px;}
+  .eta{width:120px; text-align:right;}
+  .muted{color:var(--muted)}
+  .banner{position:absolute; left:0; right:0; padding:8px 14px; text-align:center;}
+  .banner.top{top:0;} .banner.bottom{bottom:0;}
+  .warn{display:none; font-size:22px;} .warn.show{display:block;} .blink{animation:blink 1s step-start infinite;}
+  @keyframes blink { 50%{opacity:0.35;} }
+  .dotlike{text-shadow: 0 0 3px rgba(255,154,0,.7);}
+  .searchBar{display:-webkit-box;display:-webkit-flex;display:flex;gap:6px;padding:6px 0 4px;border-bottom:1px solid #222}
+  .input{flex:1;background:#000;border:1px solid #333;border-radius:6px;color:#ffcf7f;padding:8px}
+  .ctrl{background:#000;color:#ffcf7f;border:1px solid #333;border-radius:6px;padding:6px 8px}
+  .suggest{max-height:40%; overflow:auto; padding:4px 0; border-bottom:1px dashed #222}
+  .sitem{padding:0;border:1px solid #222;border-radius:6px;margin:6px 0}
+  .sitem a{display:block;padding:10px 12px;text-decoration:none;color:inherit}
+  .subbar{margin-top:6px;display:-webkit-box;display:-webkit-flex;display:flex;gap:6px;align-items:center}
+</style>
+
+<div class="screen">
+  <div id="arriveBanner" class="banner top">
+    <div class="warn" id="arriveWarn">STAND BACK — TRAIN APPROACHING</div>
+  </div>
+
+  <div class="searchBar">
+    <input id="q" class="input" placeholder="Search station (e.g. Hammersmith / King's Cross / Canary Wharf)">
+    <button id="go" class="ctrl">Search</button>
+    <button id="back" class="ctrl">Back (lite)</button>
+  </div>
+  <div id="suggest" class="suggest"></div>
+
+  <div class="subbar">
+    <div>Platform</div>
+    <select id="platformSel" class="ctrl"><option value="">All</option></select>
+    <div>Show</div>
+    <select id="limit" class="ctrl"><option>3</option><option selected>5</option><option>8</option><option>10</option></select>
+  </div>
+
+  <div class="row title dotlike">
+    <div id="titleStation">-</div>
+  </div>
+
+  <div class="list" id="list"></div>
+
+  <div class="clock dotlike" id="clock">--:--:--</div>
+
+  <div id="smokeBanner" class="banner bottom">
+    <div class="warn" id="smokeWarn">NO SMOKING OR VAPING</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  function qs(k){var m=location.search.match(new RegExp('[?&]'+k+'=([^&]+)'));return m?decodeURIComponent(m[1]):'';}
+  function pad(n){n=String(n);return n.length<2?('0'+n):n;}
+  function nowstr(){var d=new Date();return [pad(d.getHours()),pad(d.getMinutes()),pad(d.getSeconds())].join(':');}
+  function clean(s){return (s||'').replace(/\s*\(?Underground Station\)?/gi,'').replace(/\s+/g,' ').replace(/^\s+|\s+$/g,'');}
+  function fetchJSON(url, cb){var xhr=new XMLHttpRequest();xhr.open('GET',url,true);xhr.onreadystatechange=function(){if(xhr.readyState===4){try{cb(null,JSON.parse(xhr.responseText));}catch(e){cb(e);}}};xhr.send(null);}
+
+  var id = qs('id')||'';
+  var plat = qs('platform')||'';
+  var limitSel = document.getElementById('limit');
+  var platformSel = document.getElementById('platformSel');
+  var clockEl = document.getElementById('clock');
+  var titleEl = document.getElementById('titleStation');
+  var listEl = document.getElementById('list');
+  var arriveWarn = document.getElementById('arriveWarn');
+  var smokeWarn = document.getElementById('smokeWarn');
+  var qInput = document.getElementById('q'); var suggEl = document.getElementById('suggest');
+
+  function renderList(station, entries){
+    var ext = plat ? (' — '+plat) : (platformSel.value?(' — '+platformSel.value):'');
+    titleEl.innerHTML = station + ext;
+    var html = '';
+    for(var i=0;i<entries.length;i++){
+      var t = entries[i];
+      html += '<div class="row item dotlike">'
+            +   '<div class="num">'+(i+1)+'</div>'
+            +   '<div class="dest">'+clean(t.towards)+'</div>'
+            +   '<div class="eta">'+t.eta+'</div>'
+            + '</div>';
+    }
+    listEl.innerHTML = html || '<div class="muted">No arrivals</div>';
+  }
+
+  function shouldShowArrive(entries){
+    for(var i=0;i<entries.length;i++){
+      var e = entries[i];
+      var secs = Number(e.timeToStationSec||0);
+      var loc = String(e.currentLocation||'').toLowerCase();
+      if (secs <= 25) return true;
+      if (loc.indexOf('approaching')>=0 || loc.indexOf('at platform')>=0) return true;
+    }
+    return false;
+  }
+  function setArriveBanner(on){ arriveWarn.className = 'warn'+(on?' show blink':''); }
+
+  var smokeTick=0, smokeOn=false;
+  function tickSmoke(){
+    smokeTick++; var mod=smokeTick%25; var on=(mod<5);
+    if(on!==smokeOn){ smokeOn=on; smokeWarn.className='warn'+(on?' show':''); }
+  }
+
+  function refresh(){
+    if(!id){ listEl.innerHTML='<div class="muted">Pick a station via search above</div>'; return; }
+    var selPlat = platformSel.value || plat || '';
+    var params='id='+encodeURIComponent(id)+'&limit='+encodeURIComponent(limitSel.value);
+    if (selPlat) params += '&platform='+encodeURIComponent(selPlat);
+    var u='/api/platform?'+params+'&_='+Date.now();
+    fetchJSON(u, function(err, j){
+      if (err || !j){ listEl.innerHTML='<div class="muted">Load failed</div>'; setArriveBanner(false); return; }
+      var entries=(j.entries||[]);
+      var plats=(j.availablePlatforms||[]), curr=platformSel.value||'';
+      var htmlOpt='<option value="">All</option>';
+      for(var i=0;i<plats.length;i++){var p=plats[i]; htmlOpt+='<option value="'+p.name+'">'+p.name+' ('+p.count+')</option>';}
+      platformSel.innerHTML=htmlOpt;
+      if(curr){ platformSel.value=curr; } else if(plat){ platformSel.value=plat; }
+      renderList(j.stationName||id, entries);
+      setArriveBanner( shouldShowArrive(entries) );
+    });
+  }
+
+  function searchStations(){
+    var q=qInput.value||''; if(q.replace(/\s+/g,'').length<2){suggEl.innerHTML='<div class="muted">Type at least 2 chars</div>'; return; }
+    var u='/api/search?q='+encodeURIComponent(q)+'&_='+Date.now();
+    fetchJSON(u,function(err,j){
+      if(err){suggEl.innerHTML='<div class="muted">Search failed</div>';return;}
+      var list=(j&&j.results)||[]; if(!list.length){suggEl.innerHTML='<div class="muted">No results</div>';return;}
+      var html=''; for(var i=0;i<list.length;i++){var s=list[i]; var badge=(s.lines||[]).map(function(l){return l.name;}).join(' / ');
+        html+='<div class=\"sitem\"><a href=\"#\" data-id=\"'+s.id+'\" data-name=\"'+(s.name||'')+'\"><b>'+s.name+'</b><br><span class=\"badge\">'+badge+'</span></a></div>'; }
+      suggEl.innerHTML=html;
+    });
+  }
+  function handlePick(e){
+    e=e||window.event; var t=e.target||e.srcElement;
+    while(t&&t.tagName&&t.tagName.toUpperCase()!=='A'){t=t.parentNode;} if(!t) return;
+    var sid=t.getAttribute('data-id'); var snm=t.getAttribute('data-name');
+    if(sid){ id=sid; plat=''; platformSel.value=''; suggEl.innerHTML=''; qInput.blur(); if(window.scrollTo)try{window.scrollTo(0,0);}catch(ex){}
+      titleEl.innerHTML=snm||sid; refresh(); if(e.preventDefault)e.preventDefault(); if(e.stopPropagation)e.stopPropagation(); return false; }
+  }
+
+  document.getElementById('back').onclick=function(){
+    var params = id ? ('?id='+encodeURIComponent(id)+'&limit='+encodeURIComponent(limitSel.value)+(platformSel.value?('&platform='+encodeURIComponent(platformSel.value)):'') ) : '';
+    location.href = '/platform-lite.html'+params;
+  };
+  document.getElementById('go').onclick=searchStations;
+  document.getElementById('q').onkeyup=function(ev){var k=ev.keyCode||ev.which;if(k===13){searchStations();}};
+  if(suggEl.addEventListener){suggEl.addEventListener('touchstart',handlePick,false);suggEl.addEventListener('click',handlePick,false);}else{suggEl.onclick=handlePick;}
+  platformSel.onchange=refresh; limitSel.onchange=refresh;
+
+  clockEl.innerHTML=nowstr(); setInterval(function(){clockEl.innerHTML=nowstr();},1000);
+  setInterval(refresh,15000); setInterval(tickSmoke,1000);
+  if(id){ refresh(); }
+})();
+</script>
