@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>站台屏（iOS8 兼容，搜索 + 站台筛选 + 伊丽莎白线）</title>
+<title>伦敦地铁状态 · 站台屏</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="apple-touch-icon" href="/icon-152.png">
@@ -20,7 +20,8 @@
   .muted{color:#777}
   .searchBox{display:-webkit-box;display:-webkit-flex;display:flex;gap:8px;padding:10px;border-bottom:1px solid #222}
   .input{flex:1;background:#000;border:1px solid #333;border-radius:6px;color:#ffcf7f;padding:8px}
-  .suggest{padding:4px 10px;border-bottom:1px dashed #222}
+  .suggest{padding:4px 10px;border-bottom:1px dashed #222;
+           max-height:40vh; overflow:auto; -webkit-overflow-scrolling:touch;}
   .sitem{padding:0;border:1px solid #222;border-radius:6px;margin:6px 0}
   .sitem a{display:block;padding:10px 12px;text-decoration:none;color:inherit}
   .badge{color:#ffcf7f;font-size:12px}
@@ -52,40 +53,94 @@
 
 <script>
 (function(){
+  // —— 工具
   function qs(k){var m=location.search.match(new RegExp('[?&]'+k+'=([^&]+)'));return m?decodeURIComponent(m[1]):'';}
   function pad(n){n=String(n);return n.length<2?('0'+n):n;}
   function nowstr(){var d=new Date();return [pad(d.getHours()),pad(d.getMinutes()),pad(d.getSeconds())].join(':');}
   function clean(s){return (s||'').replace(/\s*\(?Underground Station\)?/gi,'').replace(/\s+/g,' ').replace(/^\s+|\s+$/g,'');}
   function fetchJSON(url, cb){var xhr=new XMLHttpRequest();xhr.open('GET',url,true);xhr.onreadystatechange=function(){if(xhr.readyState===4){try{cb(null,JSON.parse(xhr.responseText));}catch(e){cb(e);}}};xhr.send(null);}
 
-  var id=qs('id')||'';var limitSel=document.getElementById('limit');var platformSel=document.getElementById('platformSel');var stationEl=document.getElementById('station');var listEl=document.getElementById('list');var qInput=document.getElementById('q');var suggEl=document.getElementById('suggest');
+  var id=qs('id')||'';
+  var limitSel=document.getElementById('limit');
+  var platformSel=document.getElementById('platformSel');
+  var stationEl=document.getElementById('station');
+  var listEl=document.getElementById('list');
+  var qInput=document.getElementById('q');
+  var suggEl=document.getElementById('suggest');
+
+  // —— 站台列表缓存（按站点 ID）
+  var platformsCache = {}; // { [stationId]: [ {name,count}, ... ] }
 
   function render(entries,name,selectedPlatform){
-    stationEl.innerHTML=name||id||'-';var html='';
+    stationEl.innerHTML=name||id||'-';
+    var html='';
     if(selectedPlatform){
       if(!entries.length)html='<div class="muted" style="padding:10px">暂无到站信息</div>';
-      for(var i=0;i<entries.length;i++){var t=entries[i];html+='<div class="row"><div class="idx">'+(i+1)+'</div><div class="dest">'+clean(t.towards)+'</div><div class="eta">'+t.eta+'</div></div>';}
+      for(var i=0;i<entries.length;i++){
+        var t=entries[i];
+        html+='<div class="row"><div class="idx">'+(i+1)+'</div><div class="dest">'+clean(t.towards)+'</div><div class="eta">'+t.eta+'</div></div>';
+      }
       listEl.innerHTML=html;return;
     }
     var groups={},order=[];
-    for(var j=0;j<entries.length;j++){var p=entries[j].platform||'Platform';if(!groups[p]){groups[p]=[];order.push(p);}groups[p].push(entries[j]);}
-    for(var g=0;g<order.length;g++){var pName=order[g];html+='<div class="platHead">站台：'+pName+'</div>';var arr=groups[pName];
-      for(var k=0;k<arr.length;k++){var t2=arr[k];html+='<div class="row"><div class="idx">'+(k+1)+'</div><div class="dest">'+clean(t2.towards)+'</div><div class="eta">'+t2.eta+'</div></div>';}} 
+    for(var j=0;j<entries.length;j++){
+      var p=entries[j].platform||'Platform';
+      if(!groups[p]){groups[p]=[];order.push(p);}groups[p].push(entries[j]);
+    }
+    for(var g=0;g<order.length;g++){
+      var pName=order[g];
+      html+='<div class="platHead">站台：'+pName+'</div>';
+      var arr=groups[pName];
+      for(var k=0;k<arr.length;k++){
+        var t2=arr[k];
+        html+='<div class="row"><div class="idx">'+(k+1)+'</div><div class="dest">'+clean(t2.towards)+'</div><div class="eta">'+t2.eta+'</div></div>';
+      }
+    }
     listEl.innerHTML=html||'<div class="muted" style="padding:10px">暂无到站信息</div>';
+  }
+
+  function populatePlatforms(stationId, plats, keepSelection){
+    // 如果有缓存且更全，用缓存；否则用本次并写入缓存
+    var cached = platformsCache[stationId];
+    if (cached && cached.length >= (plats||[]).length) { plats = cached; }
+    else if (plats && plats.length) { platformsCache[stationId] = plats; }
+
+    var curr=keepSelection ? platformSel.value : '';
+    var htmlOpt='<option value="">全部站台</option>';
+    for(var i=0;i<(plats||[]).length;i++){
+      var p=plats[i];
+      htmlOpt+='<option value="'+p.name+'">'+p.name+' ('+p.count+')</option>';
+    }
+    platformSel.innerHTML=htmlOpt;
+    if (curr) platformSel.value = curr;
   }
 
   function refresh(){
     if(!id){ listEl.innerHTML='<div class="muted" style="padding:10px">请先搜索并选择车站</div>'; return; }
+    var selectedPlat=platformSel.value||'';
     var params='id='+encodeURIComponent(id)+'&limit='+encodeURIComponent(limitSel.value);
-    var selectedPlat=platformSel.value||''; if(selectedPlat)params+='&platform='+encodeURIComponent(selectedPlat);
+    if (selectedPlat) params+='&platform='+encodeURIComponent(selectedPlat);
     var u='/api/platform?'+params+'&_='+Date.now();
+
     fetchJSON(u,function(err,j){
       if(err){ listEl.innerHTML='<div class="muted" style="padding:10px">加载失败</div>'; return; }
-      var entries=(j&&j.entries)||[];var plats=(j&&j.availablePlatforms)||[];
-      var curr=platformSel.value||''; var htmlOpt='<option value="">全部站台</option>';
-      for(var i=0;i<plats.length;i++){var p=plats[i];htmlOpt+='<option value="'+p.name+'">'+p.name+' ('+p.count+')</option>';}
-      platformSel.innerHTML=htmlOpt; if(curr){platformSel.value=curr;}
-      render(entries,j&&j.stationName,selectedPlat); persistState();
+      var entries=(j&&j.entries)||[];
+      var plats=(j&&j.availablePlatforms)||[];
+
+      // 优先用更全的列表填充下拉；若明显不全（只剩“全部+当前”），再补打一遍不带 platform 的请求
+      populatePlatforms(id, plats, true);
+      if ((plats||[]).length<=2 && (platformsCache[id]||[]).length<=2){
+        // 额外拉一遍完整列表
+        var u2='/api/platform?id='+encodeURIComponent(id)+'&limit='+encodeURIComponent(limitSel.value)+'&_='+Date.now();
+        fetchJSON(u2,function(e2,j2){
+          var fullPlats=(j2&&j2.availablePlatforms)||[];
+          populatePlatforms(id, fullPlats, true);
+          render(entries, j&&j.stationName, selectedPlat);
+        });
+      } else {
+        render(entries, j&&j.stationName, selectedPlat);
+      }
+      persistState();
     });
   }
 
@@ -95,15 +150,25 @@
     fetchJSON(u,function(err,j){
       if(err){suggEl.innerHTML='<div class="muted">搜索失败</div>';return;}
       var list=(j&&j.results)||[]; if(!list.length){suggEl.innerHTML='<div class="muted">无结果</div>';return;}
-      var html=''; for(var i=0;i<list.length;i++){var s=list[i];var badge=(s.lines||[]).map(function(l){return l.name;}).join(' / ');
-        html+='<div class="sitem"><a href="#" data-id="'+s.id+'" data-name="'+(s.name||'')+'"><b>'+s.name+'</b><br><span class="badge">'+badge+'</span></a></div>';}
+      var html=''; for(var i=0;i<list.length;i++){
+        var s=list[i];var badge=(s.lines||[]).map(function(l){return l.name;}).join(' / ');
+        html+='<div class="sitem"><a href="#" data-id="'+s.id+'" data-name="'+(s.name||'')+'"><b>'+s.name+
+              '</b><br><span class="badge">'+badge+'</span></a></div>';
+      }
       suggEl.innerHTML=html;
     });
   }
 
-  function persistState(){try{var obj={id:id||'',limit:parseInt(limitSel.value,10)||8,platform:platformSel.value||''};localStorage.setItem('ios8_board_state',JSON.stringify(obj));}catch(e){}}
-  try{var saved=localStorage.getItem('ios8_board_state');if(saved){var obj=JSON.parse(saved);if(!id&&obj.id)id=obj.id;if(obj.limit)limitSel.value=String(obj.limit);if(obj.platform)platformSel.value=obj.platform;}}catch(e){}
+  function persistState(){try{
+    var obj={id:id||'',limit:parseInt(limitSel.value,10)||8,platform:platformSel.value||''};
+    localStorage.setItem('ios8_board_state',JSON.stringify(obj));
+  }catch(e){}}
+  try{
+    var saved=localStorage.getItem('ios8_board_state');
+    if(saved){var obj=JSON.parse(saved);if(!id&&obj.id)id=obj.id;if(obj.limit)limitSel.value=String(obj.limit);if(obj.platform)platformSel.value=obj.platform;}
+  }catch(e){}
 
+  // —— 打开站台屏
   document.getElementById('openBoard').onclick=function(){
     if(!id){ alert('请先选择车站'); return; }
     var params='id='+encodeURIComponent(id)+'&limit='+encodeURIComponent(limitSel.value);
@@ -111,19 +176,53 @@
     location.href='/platform-board.html?'+params;
   };
 
-  function handlePick(e){
-    e=e||window.event; var t=e.target||e.srcElement;
-    while(t&&t.tagName&&t.tagName.toUpperCase()!=='A'){t=t.parentNode;} if(!t) return;
-    var sid=t.getAttribute('data-id'); var snm=t.getAttribute('data-name');
-    if(sid){ id=sid; stationEl.innerHTML=snm||sid; platformSel.value=''; suggEl.innerHTML=''; qInput.blur(); if(window.scrollTo)try{window.scrollTo(0,0);}catch(ex){} 
-      refresh(); if(e.preventDefault)e.preventDefault(); if(e.stopPropagation)e.stopPropagation(); return false; }
+  // —— 联想点击：增加“滑动阈值”防误触
+  var touchStartX=0,touchStartY=0,isDragging=false;
+  function onTouchStart(e){
+    var t=e.touches?e.touches[0]:null; if(!t)return;
+    touchStartX=t.clientX; touchStartY=t.clientY; isDragging=false;
   }
-  if(suggEl.addEventListener){suggEl.addEventListener('touchstart',handlePick,false);suggEl.addEventListener('click',handlePick,false);}else{suggEl.onclick=handlePick;}
+  function onTouchMove(e){
+    var t=e.touches?e.touches[0]:null; if(!t)return;
+    var dx=Math.abs(t.clientX-touchStartX), dy=Math.abs(t.clientY-touchStartY);
+    if(dx>8 || dy>8){ isDragging=true; } // 超过 8px 判定为滚动
+  }
+  function handlePick(e){
+    // 如果刚滑动过，则不触发点击
+    if(isDragging){ isDragging=false; return false; }
+    e=e||window.event; var t=e.target||e.srcElement;
+    while(t&&t.tagName&&t.tagName.toUpperCase()!=='A'){t=t.parentNode;} if(!t) return false;
+    var sid=t.getAttribute('data-id'); var snm=t.getAttribute('data-name');
+    if(sid){
+      id=sid; stationEl.innerHTML=snm||sid; platformSel.value=''; suggEl.innerHTML='';
+      qInput.blur(); try{window.scrollTo(0,0);}catch(ex){}
+      // 清空本站的站台缓存，避免带入上一站
+      platformsCache[id]=undefined;
+      refresh();
+      if(e.preventDefault)e.preventDefault(); if(e.stopPropagation)e.stopPropagation();
+      return false;
+    }
+  }
+  // 绑定触摸与点击（iOS8 兼容）
+  if(suggEl.addEventListener){
+    suggEl.addEventListener('touchstart',onTouchStart,false);
+    suggEl.addEventListener('touchmove',onTouchMove,false);
+    suggEl.addEventListener('touchend',handlePick,false);
+    suggEl.addEventListener('click',function(e){handlePick(e);},false);
+  }else{
+    suggEl.onclick=handlePick;
+  }
 
+  // 其它事件与时钟
   document.getElementById('fs').onclick=function(){var de=document.documentElement;if(de.requestFullscreen)de.requestFullscreen();};
   document.getElementById('limit').onchange=function(){refresh();persistState();};
   document.getElementById('platformSel').onchange=function(){refresh();persistState();};
-  document.getElementById('go').onclick=searchStations; document.getElementById('q').onkeyup=function(ev){var k=ev.keyCode||ev.which;if(k===13){searchStations();}};
-  if(id){refresh();} setInterval(refresh,15000); setInterval(function(){document.getElementById('clock').innerHTML=nowstr();},1000);
+  document.getElementById('go').onclick=searchStations;
+  document.getElementById('q').onkeyup=function(ev){var k=ev.keyCode||ev.which;if(k===13){searchStations();}};
+
+  // 初始与定时
+  if(id){refresh();} 
+  setInterval(refresh,15000); 
+  setInterval(function(){document.getElementById('clock').innerHTML=nowstr();},1000);
 })();
 </script>
