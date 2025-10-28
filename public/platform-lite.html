@@ -139,6 +139,33 @@
   modalClose.onclick = hideModal;
   modalMask.onclick = function(e){ if(e.target===modalMask) hideModal(); };
 
+  // —— 线路状态栏触摸滚动防误触
+  var linesDragging = false, linesTouchX = 0, linesTouchY = 0, linesListenersBound = false;
+
+  function linesOnTouchStart(e){
+    var t = e.touches ? e.touches[0] : null; if(!t) return;
+    linesDragging = false; linesTouchX = t.clientX; linesTouchY = t.clientY;
+  }
+  function linesOnTouchMove(e){
+    var t = e.touches ? e.touches[0] : null; if(!t) return;
+    if (Math.abs(t.clientX - linesTouchX) > 8 || Math.abs(t.clientY - linesTouchY) > 8){
+      linesDragging = true;
+    }
+  }
+  function handleLineTap(e){
+    // 如果刚刚发生了滑动，就不触发点击
+    if (linesDragging){ linesDragging = false; return; }
+    var t = e.target || e.srcElement;
+    while(t && (!t.getAttribute || !t.getAttribute('data-line'))){ t = t.parentNode; }
+    if(!t) return;
+    var cls = t.className || '';
+    if (cls.indexOf('clickable') < 0) return; // 只有非 Good Service 才弹窗
+    var name = t.getAttribute('data-name') || '';
+    var reason = t.getAttribute('data-reason'); reason = reason ? decodeURIComponent(reason) : '';
+    if (!reason) return;
+    setModal(name + ' · 线路信息', reason.replace(/\n/g,'<br>'));
+  }
+
   function statusTextOf(lineObj){
     // 兼容多种返回形态
     if(!lineObj) return '';
@@ -175,23 +202,20 @@
     linesWrap.innerHTML = frag;
     linesBar.style.display='block';
 
-    // 绑定点击（显示弹窗）
-    function onClick(e){
-      var t=e.target||e.srcElement;
-      while(t && (!t.getAttribute || !t.getAttribute('data-line'))){ t=t.parentNode; }
-      if(!t) return;
-      var name=t.getAttribute('data-name')||'';
-      var reason=t.getAttribute('data-reason'); reason=reason?decodeURIComponent(reason):'';
-      // 仅在有说明且非 Good Service 时弹窗
-      var cls=t.className||''; if(cls.indexOf('clickable')<0) return;
-      setModal(name+' · 线路信息', reason.replace(/\n/g,'<br>'));
+  // 仅绑定一次监听，避免重复绑定导致多次触发
+  if (!linesListenersBound) {
+    if (linesWrap.addEventListener) {
+      // 触摸滚动阈值
+      linesWrap.addEventListener('touchstart', linesOnTouchStart, false);
+      linesWrap.addEventListener('touchmove', linesOnTouchMove, false);
+      // tap 触发（touchend）与鼠标点击
+      linesWrap.addEventListener('touchend', handleLineTap, false);
+      linesWrap.addEventListener('click', handleLineTap, false);
+    } else {
+      // 老浏览器兜底
+      linesWrap.onclick = handleLineTap;
     }
-    if(linesWrap.addEventListener){
-      linesWrap.addEventListener('click',onClick,false);
-      linesWrap.addEventListener('touchstart',onClick,false);
-    }else{
-      linesWrap.onclick=onClick;
-    }
+    linesListenersBound = true;
   }
 
   function fetchLineStatus(lineIds, cb){
