@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>站台电子屏</title>
+<title>站台屏</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="apple-touch-icon" href="/icon-152.png">
@@ -58,12 +58,14 @@
 
 <script>
 (function(){
+  // —— 小工具
   function qs(k){var m=location.search.match(new RegExp('[?&]'+k+'=([^&]+)'));return m?decodeURIComponent(m[1]):'';}
   function pad(n){n=String(n);return n.length<2?('0'+n):n;}
   function nowstr(){var d=new Date();return [pad(d.getHours()),pad(d.getMinutes()),pad(d.getSeconds())].join(':');}
   function clean(s){return (s||'').replace(/\s*\(?Underground Station\)?/gi,'').replace(/\s+/g,' ').replace(/^\s+|\s+$/g,'');}
   function fetchJSON(url, cb){var xhr=new XMLHttpRequest();xhr.open('GET',url,true);xhr.onreadystatechange=function(){if(xhr.readyState===4){try{cb(null,JSON.parse(xhr.responseText));}catch(e){cb(e);}}};xhr.send(null);}
 
+  // —— URL & 元素
   var id = qs('id')||'';
   var plat = qs('platform')||'';
   var limitSel = document.getElementById('limit');
@@ -73,34 +75,63 @@
   var listEl = document.getElementById('list');
   var qInput = document.getElementById('q'); var suggEl = document.getElementById('suggest');
 
-  // 禁烟间歇：每 25s 出现 5s（仅在未显示进站提示时生效）
-  var smokeTick=0; function smokingOn(){ return (smokeTick % 35) < 5; }
+  // —— 参数（可按需微调）
+  var APPROACH_SECS = 55;        // 触发阈值（放宽到 55s，避免错过）
+  var ARRIVE_DURATION = 8000;    // “STAND BACK”显示 8s
+  var BASE_REFRESH = 15000;      // 常规刷新 15s
+  var BOOST_REFRESH = 5000;      // 临近时加速刷新 5s
 
-  // 进站判定（放宽阈值，避免“错过窗口”）
+  // —— 状态
+  var smokeTick=0;                         // 禁烟节奏计数
+  var arriveShowUntil = 0;                 // 进站提示窗口结束时间
+  var approachBoostUntil = 0;              // 加速刷新窗口结束时间
+  var refreshTimer = null;                 // 当前刷新定时器句柄
+  var lastRefreshAt = 0;                   // 上次成功刷新时间戳
+
+  // —— 取“剩余秒数”的兼容函数：timeToStationSec | timeToStation | expectedArrival
+  function getSecs(e){
+    if (typeof e.timeToStationSec === 'number' && isFinite(e.timeToStationSec)) return e.timeToStationSec;
+    if (typeof e.timeToStation === 'number' && isFinite(e.timeToStation)) return e.timeToStation;
+    // 兼容 expectedArrival(ISO 8601)
+    if (e.expectedArrival){
+      var t = Date.parse(e.expectedArrival);
+      if (!isNaN(t)) {
+        var s = Math.round((t - Date.now())/1000);
+        return s;
+      }
+    }
+    return null;
+  }
+
   function isApproaching(entries){
     for(var i=0;i<entries.length;i++){
       var e = entries[i];
-      var secsRaw = e.timeToStationSec;
-      var secs = (typeof secsRaw==='number' && isFinite(secsRaw)) ? secsRaw : null;
-      // ① 秒数存在且 ≤45s（含 0~60s 视作“Due”的范围更稳妥）
-      if (secs!==null && secs>=0 && secs<=45) return true;
-      // ② 位置文案包含这些关键词
+      var secs = getSecs(e);
+      if (secs!==null && secs>=0 && secs<=APPROACH_SECS) return true;
       var loc = String(e.currentLocation||'').toLowerCase();
       if (loc && (loc.indexOf('approaching')>=0 || loc.indexOf('at platform')>=0 || loc.indexOf('arrived')>=0)) return true;
     }
     return false;
   }
 
-  // 进站提示：展示时长 8s，边沿触发
-  var arriveShowUntil = 0;
-  var ARRIVE_DURATION = 8000; // 可改为 5000~10000
-  function updateArriveWindow(triggerNow){
+  // 触发/展示窗口与加速刷新窗口
+  function updateWindows(entries){
     var now = Date.now();
-    if (triggerNow && now > arriveShowUntil){
-      arriveShowUntil = now + ARRIVE_DURATION; // 开一个新窗口
+    var trigger = isApproaching(entries);
+
+    // 进入“接近”则开启展示窗口（8s）
+    if (trigger && now > arriveShowUntil) {
+      arriveShowUntil = now + ARRIVE_DURATION;
     }
-    return now <= arriveShowUntil; // 是否在展示窗口内
+    // 进入“接近”则顺便开启加速刷新窗口（30s）
+    if (trigger && now > approachBoostUntil) {
+      approachBoostUntil = now + 30000;
+      restartRefreshLoop(); // 立即切换成更快的刷新频率
+    }
+    return now <= arriveShowUntil;
   }
+
+  function smokingOn(){ return (smokeTick % 25) < 5; } // 每 25s 显示 5s
 
   function renderList(station, entries){
     titleEl.innerHTML = station + (plat ? (' — '+plat) : (platformSel.value?(' — '+platformSel.value):''));
@@ -108,8 +139,7 @@
     var lim = parseInt(limitSel.value,10)||5;
     if(entries.length>lim) entries = entries.slice(0,lim);
 
-    var trigger = isApproaching(entries);
-    var showArrive = updateArriveWindow(trigger);
+    var showArrive = updateWindows(entries);
 
     if (showArrive){
       // 第1行：首列车
@@ -119,13 +149,12 @@
       } else {
         html += '<div class="row item dotlike"><div class="num">1</div><div class="dest muted">暂无到站信息</div><div class="eta"></div></div>';
       }
-      // 第2行：进站标语（闪烁）
+      // 第2行：进站标语（闪烁）；第3行留空（不显示编号）
       html += '<div class="bannerRow dotlike blink">STAND BACK — TRAIN APPROACHING</div>';
-      // 第3行：留空（不渲染编号 3）
       listEl.innerHTML = html; return;
     }
 
-    // 正常：若需禁烟标语，则替代第3行（无编号）
+    // 正常：如需禁烟标语，则替代第3行（无编号）
     var smoke = smokingOn();
     for(var i=0;i<entries.length;i++){
       if (smoke && i===2){
@@ -150,17 +179,26 @@
     var u='/api/platform?'+params+'&_='+Date.now();
     fetchJSON(u, function(err, j){
       if (err || !j){ listEl.innerHTML='<div class="muted">加载失败</div>'; return; }
+      lastRefreshAt = Date.now();
       var entries=(j.entries||[]);
+      // 刷新站台下拉
       var plats=(j.availablePlatforms||[]), curr=platformSel.value||'';
       var htmlOpt='<option value="">全部站台</option>';
       for(var i=0;i<plats.length;i++){var p=plats[i]; htmlOpt+='<option value="'+p.name+'">'+p.name+' ('+p.count+')</option>';}
-      platformSel.innerHTML=htmlOpt;
-      if(curr){ platformSel.value=curr; } else if(plat){ platformSel.value=plat; }
+      platformSel.innerHTML=htmlOpt; if(curr){ platformSel.value=curr; } else if(plat){ platformSel.value=plat; }
       renderList(j.stationName||id, entries);
     });
   }
 
-  // 搜索
+  // 自适应刷新频率：接近时 5s；否则 15s
+  function restartRefreshLoop(){
+    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    var now = Date.now();
+    var interval = (now <= approachBoostUntil) ? BOOST_REFRESH : BASE_REFRESH;
+    refreshTimer = setInterval(refresh, interval);
+  }
+
+  // —— 搜索（与 lite 页一致）
   function searchStations(){
     var q=qInput.value||''; if(q.replace(/\s+/g,'').length<2){suggEl.innerHTML='<div class="muted">输入至少 2 个字符</div>'; return; }
     var u='/api/search?q='+encodeURIComponent(q)+'&_='+Date.now();
@@ -176,8 +214,9 @@
     e=e||window.event; var t=e.target||e.srcElement;
     while(t&&t.tagName&&t.tagName.toUpperCase()!=='A'){t=t.parentNode;} if(!t) return;
     var sid=t.getAttribute('data-id'); var snm=t.getAttribute('data-name');
-    if(sid){ id=sid; plat=''; platformSel.value=''; suggEl.innerHTML=''; qInput.blur(); if(window.scrollTo)try{window.scrollTo(0,0);}catch(ex){}
-      titleEl.innerHTML=snm||sid; renderList('-', []); refresh(); if(e.preventDefault)e.preventDefault(); if(e.stopPropagation)e.stopPropagation(); return false; }
+    if(sid){ id=sid; plat=''; platformSel.value=''; suggEl.innerHTML=''; qInput.blur(); try{window.scrollTo(0,0);}catch(ex){}
+      titleEl.innerHTML=snm||sid; arriveShowUntil=0; approachBoostUntil=0; restartRefreshLoop(); refresh();
+      if(e.preventDefault)e.preventDefault(); if(e.stopPropagation)e.stopPropagation(); return false; }
   }
 
   document.getElementById('back').onclick=function(){
@@ -186,14 +225,16 @@
   };
   document.getElementById('go').onclick=searchStations;
   document.getElementById('q').onkeyup=function(ev){var k=ev.keyCode||ev.which;if(k===13){searchStations();}};
-  var suggEl=document.getElementById('suggest');
   if(suggEl.addEventListener){suggEl.addEventListener('touchstart',handlePick,false);suggEl.addEventListener('click',handlePick,false);}else{suggEl.onclick=handlePick;}
-  platformSel.onchange=refresh; limitSel.onchange=refresh;
+  platformSel.onchange=function(){arriveShowUntil=0; approachBoostUntil=0; restartRefreshLoop(); refresh();};
+  limitSel.onchange=function(){refresh();};
 
   // 时钟与定时器
   clockEl.innerHTML=nowstr(); setInterval(function(){clockEl.innerHTML=nowstr();},1000);
-  setInterval(function(){ smokeTick++; },1000); // 控制禁烟节奏
-  setInterval(refresh,15000);
+  setInterval(function(){ smokeTick++; },1000);
+
+  // 启动
+  restartRefreshLoop();
   if(id){ refresh(); }
 })();
 </script>
