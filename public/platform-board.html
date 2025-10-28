@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>站台显示屏</title>
+<title>站台电子屏</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="apple-touch-icon" href="/icon-152.png">
@@ -34,7 +34,7 @@
 
 <div class="screen">
   <div class="searchBar">
-    <input id="q" class="input" placeholder="搜索站名（如 Hammersmith / King's Cross / Canary Wharf）">
+    <input id="q" class="input" placeholder="搜索站名">
     <button id="go" class="ctrl">搜索</button>
     <button id="back" class="ctrl">返回简洁版</button>
   </div>
@@ -73,34 +73,33 @@
   var listEl = document.getElementById('list');
   var qInput = document.getElementById('q'); var suggEl = document.getElementById('suggest');
 
-  // —— 禁烟间歇：每 25s 显示 5s，仅在未显示“接近”提示时生效
-  var smokeTick=0; function smokingOn(){ return (smokeTick % 25) < 5; }
+  // 禁烟间歇：每 25s 出现 5s（仅在未显示进站提示时生效）
+  var smokeTick=0; function smokingOn(){ return (smokeTick % 35) < 5; }
 
-  // —— 进站判定：只接受有效的正秒数；或 location 提示
+  // 进站判定（放宽阈值，避免“错过窗口”）
   function isApproaching(entries){
     for(var i=0;i<entries.length;i++){
       var e = entries[i];
-      // 只接受“存在且>0”的秒数，避免缺失被当作 0
       var secsRaw = e.timeToStationSec;
       var secs = (typeof secsRaw==='number' && isFinite(secsRaw)) ? secsRaw : null;
-      if (secs!==null && secs>0 && secs<=25) return true;
+      // ① 秒数存在且 ≤45s（含 0~60s 视作“Due”的范围更稳妥）
+      if (secs!==null && secs>=0 && secs<=45) return true;
+      // ② 位置文案包含这些关键词
       var loc = String(e.currentLocation||'').toLowerCase();
-      if (loc && (loc.indexOf('approaching')>=0 || loc.indexOf('at platform')>=0)) return true;
+      if (loc && (loc.indexOf('approaching')>=0 || loc.indexOf('at platform')>=0 || loc.indexOf('arrived')>=0)) return true;
     }
     return false;
   }
 
-  // —— 进站提示的“展示时长”与“边沿触发”
-  var arriveShowUntil = 0;            // 到期时间戳（ms）
-  var ARRIVE_DURATION = 8000;         // 展示 8 秒（你可改 5000~10000）
+  // 进站提示：展示时长 8s，边沿触发
+  var arriveShowUntil = 0;
+  var ARRIVE_DURATION = 8000; // 可改为 5000~10000
   function updateArriveWindow(triggerNow){
     var now = Date.now();
-    // 只有从未显示→触发 才开启一个窗口；窗口内不重复开启
     if (triggerNow && now > arriveShowUntil){
-      arriveShowUntil = now + ARRIVE_DURATION;
+      arriveShowUntil = now + ARRIVE_DURATION; // 开一个新窗口
     }
-    // 窗口到期后自然隐藏
-    return now <= arriveShowUntil;
+    return now <= arriveShowUntil; // 是否在展示窗口内
   }
 
   function renderList(station, entries){
@@ -109,30 +108,29 @@
     var lim = parseInt(limitSel.value,10)||5;
     if(entries.length>lim) entries = entries.slice(0,lim);
 
-    // 计算是否触发 + 是否处于展示窗口
     var trigger = isApproaching(entries);
     var showArrive = updateArriveWindow(trigger);
 
     if (showArrive){
-      // 第 1 行：首列车
+      // 第1行：首列车
       if (entries.length > 0){
         var t0 = entries[0];
         html += '<div class="row item dotlike"><div class="num">1</div><div class="dest">'+clean(t0.towards)+'</div><div class="eta">'+t0.eta+'</div></div>';
       } else {
         html += '<div class="row item dotlike"><div class="num">1</div><div class="dest muted">暂无到站信息</div><div class="eta"></div></div>';
       }
-      // 第 2 行：进站标语
+      // 第2行：进站标语（闪烁）
       html += '<div class="bannerRow dotlike blink">STAND BACK — TRAIN APPROACHING</div>';
-      // 第 3 行：留空（不显示“3”编号）
+      // 第3行：留空（不渲染编号 3）
       listEl.innerHTML = html; return;
     }
 
-    // 正常模式：如需显示禁烟，把第 3 行替换为标语（且无编号）
+    // 正常：若需禁烟标语，则替代第3行（无编号）
     var smoke = smokingOn();
     for(var i=0;i<entries.length;i++){
       if (smoke && i===2){
         html += '<div class="bannerRow dotlike">NO SMOKING OR VAPING</div>';
-        break; // 只替换第三位；后面不再绘制
+        break;
       }
       var t = entries[i];
       html += '<div class="row item dotlike">'
@@ -162,7 +160,7 @@
     });
   }
 
-  // —— 搜索（与 lite 页一致）
+  // 搜索
   function searchStations(){
     var q=qInput.value||''; if(q.replace(/\s+/g,'').length<2){suggEl.innerHTML='<div class="muted">输入至少 2 个字符</div>'; return; }
     var u='/api/search?q='+encodeURIComponent(q)+'&_='+Date.now();
