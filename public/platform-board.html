@@ -75,24 +75,39 @@
   var listEl = document.getElementById('list');
   var qInput = document.getElementById('q'); var suggEl = document.getElementById('suggest');
 
-  // —— 参数（你可改）
+  // —— 参数（可调）
   var APPROACH_SECS = 55;       // 触发阈值（秒）
-  var ARRIVE_DURATION = 8000;   // STAND BACK 显示时长
+  var ARRIVE_DURATION = 8000;   // STAND BACK 显示 8s
   var BASE_REFRESH = 15000;     // 常规刷新
   var BOOST_REFRESH = 5000;     // 接近时加速刷新 5s
-  var BOOST_WINDOW  = 30000;    // 加速刷新窗口 30s
+  var BOOST_WINDOW  = 30000;    // 加速刷新 30s
+  var RETRIGGER_COOLDOWN = 90000; // 同一“第一辆车”最多 90s 才允许再次触发一次
 
   var smokeTick=0; 
-  var arriveShowUntil = 0;
-  var approachBoostUntil = 0;
+  var arriveShowUntil = 0;         // 当前提示窗口结束时间（到时自动隐藏）
+  var approachBoostUntil = 0;      // 加速刷新到期时间
   var refreshTimer = null;
+
+  // 为“第一辆车”生成一个稳定的 key（没有 trainId 时的替代）
+  function leadKeyOf(e){
+    if(!e) return '';
+    var k = [
+      e.trainId || e.vehicleId || '',
+      e.lineId || e.line || '',
+      e.platform || e.platformName || '',
+      e.destinationName || '',
+      e.towards || ''
+    ].join('|').toLowerCase();
+    return k;
+  }
+  var lastShownKey = '';     // 上一次触发时的“第一辆车”key
+  var lastShownAt  = 0;      // 上一次触发时间戳
 
   // —— 从多种字段推导“剩余秒数”；最后再从 ETA 文案兜底
   function parseEtaToSecs(eta){
     if(!eta) return null;
     var s = String(eta).toLowerCase().trim();
-    if (s === 'due' || s === 'arriving' || s === 'arrived') return 20;     // 直接触发
-    // '1 min' / '2 mins' / '45s'
+    if (s === 'due' || s === 'arriving' || s === 'arrived') return 20;
     var m = s.match(/(\d+)\s*min/); if(m) return Math.max(0,(+m[1])*60);
     var s2 = s.match(/(\d+)\s*s(ec|econds?)?/); if(s2) return Math.max(0,(+s2[1]));
     return null;
@@ -106,20 +121,12 @@
       var t = Date.parse(e.expectedArrival);
       if (!isNaN(t)) return Math.round((t - Date.now())/1000);
     }
-    // 兜底：从展示用的 eta 文案推断
-    if (e.eta != null) {
-      var pv = parseEtaToSecs(e.eta);
-      if (pv != null) return pv;
-    }
-    if (e.etaText != null) {
-      var pv2 = parseEtaToSecs(e.etaText);
-      if (pv2 != null) return pv2;
-    }
+    if (e.eta != null) { var pv = parseEtaToSecs(e.eta); if (pv != null) return pv; }
+    if (e.etaText != null) { var pv2 = parseEtaToSecs(e.etaText); if (pv2 != null) return pv2; }
     return null;
   }
 
   function isApproaching(entries){
-    // 以“第一辆车”为主（你屏幕也只展示前几辆），但也允许其它车触发
     for(var i=0;i<entries.length;i++){
       var e = entries[i];
       var secs = getSecs(e);
@@ -130,15 +137,30 @@
     return false;
   }
 
-  function updateWindows(entries){
-    var now = Date.now();
-    var trigger = isApproaching(entries);
-    // 边沿触发：从“未接近→接近”时开启展示窗 & 加速窗
-    if (trigger && now > arriveShowUntil)  arriveShowUntil  = now + ARRIVE_DURATION;
-    if (trigger && now > approachBoostUntil){ approachBoostUntil = now + BOOST_WINDOW; restartRefreshLoop(); }
-    // 若仍处于接近状态，展示窗自动“顺延”（避免 8s 刚结束就还在接近）
-    if (trigger && now + 3000 > arriveShowUntil) arriveShowUntil = now + 3000;
-    return now <= arriveShowUntil;
+  // —— 一次性触发：只在“首次进入接近状态”且通过去重条件时开窗；到期后不续命
+  function tryStartArriveWindow(entries){
+    if (!entries.length) return false;
+    var lead = entries[0];
+    var key  = leadKeyOf(lead);
+    var now  = Date.now();
+
+    // 只有满足“接近”才考虑开启
+    if (!isApproaching(entries)) return false;
+
+    // 同一第一辆车，90s 冷却内不重复触发
+    if (key && key === lastShownKey && (now - lastShownAt) < RETRIGGER_COOLDOWN) return false;
+
+    // 开启 8s 展示窗口，并记录本次“第一辆车”的 key
+    arriveShowUntil = now + ARRIVE_DURATION;
+    lastShownKey = key;
+    lastShownAt  = now;
+
+    // 同时开启 30s 加速刷新窗口
+    if (now > approachBoostUntil) {
+      approachBoostUntil = now + BOOST_WINDOW;
+      restartRefreshLoop();
+    }
+    return true;
   }
 
   function smokingOn(){ return (smokeTick % 25) < 5; }
@@ -149,7 +171,11 @@
     var lim = parseInt(limitSel.value,10)||5;
     if(entries.length>lim) entries = entries.slice(0,lim);
 
-    var showArrive = updateWindows(entries);
+    var now = Date.now();
+    // 若窗口已到期，直接关闭；若未开启，尝试开启（一次性）
+    if (now > arriveShowUntil) { arriveShowUntil = 0; }
+    if (arriveShowUntil === 0) { tryStartArriveWindow(entries); }
+    var showArrive = (arriveShowUntil && now <= arriveShowUntil);
 
     if (showArrive){
       // 第1行：首列车
@@ -159,7 +185,7 @@
       } else {
         html += '<div class="row item dotlike"><div class="num">1</div><div class="dest muted">暂无到站信息</div><div class="eta"></div></div>';
       }
-      // 第2行：进站标语；第3行完全留空（不渲染“3”）
+      // 第2行：进站标语（闪烁）；第3行留空（不显示编号）
       html += '<div class="bannerRow dotlike blink">STAND BACK — TRAIN APPROACHING</div>';
       listEl.innerHTML = html; return;
     }
@@ -224,7 +250,7 @@
     while(t&&t.tagName&&t.tagName.toUpperCase()!=='A'){t=t.parentNode;} if(!t) return;
     var sid=t.getAttribute('data-id'); var snm=t.getAttribute('data-name');
     if(sid){ id=sid; plat=''; platformSel.value=''; suggEl.innerHTML=''; qInput.blur(); try{window.scrollTo(0,0);}catch(ex){}
-      titleEl.innerHTML=snm||sid; arriveShowUntil=0; approachBoostUntil=0; restartRefreshLoop(); refresh();
+      titleEl.innerHTML=snm||sid; arriveShowUntil=0; approachBoostUntil=0; lastShownKey=''; lastShownAt=0; restartRefreshLoop(); refresh();
       if(e.preventDefault)e.preventDefault(); if(e.stopPropagation)e.stopPropagation(); return false; }
   }
 
